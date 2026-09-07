@@ -45,6 +45,11 @@ let board = preset(),
 try {
     const saved = localStorage.getItem("ricochet-lab-v1");
     if (saved) board = validateBoard(JSON.parse(saved));
+    if (localStorage.getItem("ricochet-default-rules-v2") !== "applied") {
+        board.rules = { ...board.rules, requireTurn: false };
+        localStorage.setItem("ricochet-lab-v1", JSON.stringify(board));
+        localStorage.setItem("ricochet-default-rules-v2", "applied");
+    }
 } catch {
     notify("已载入示例；此前保存的棋盘无法读取。");
 }

@@ -39,7 +39,7 @@ export function assemble(layout, tiles, previous = null) {
         b = emptyBoard();
     b.goals = [];
     b.layout = [...layout];
-    b.rules = { requireTurn: true };
+    b.rules = { requireTurn: false };
     for (const [slot, t] of picked.entries()) {
         for (const [row, col] of t.vertical_walls)
             wall(b, tilePoint(row, col, slot), (1 + slot) % 4);

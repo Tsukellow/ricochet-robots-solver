@@ -28,7 +28,13 @@ export function randomRobots(input, rng = Math.random) {
 export function randomTarget(input, rng = Math.random) {
     const b = validateBoard(input);
     if (b.goals?.length) {
-        const valid = b.goals.filter((g) => g.robot < b.robots.length),
+        const valid = b.goals.filter(
+                (g) =>
+                    g.robot < b.robots.length &&
+                    (g.robot < 0
+                        ? !b.robots.includes(g.cell)
+                        : b.robots[g.robot] !== g.cell),
+            ),
             others = valid.filter(
                 (g) => g.cell !== b.target.cell || g.robot !== b.target.robot,
             );
@@ -81,7 +87,7 @@ export function connected(b) {
 export function randomArtificial(previous, rng = Math.random) {
     const b = emptyBoard();
     if (previous) {
-        b.rules = previous.rules ?? { requireTurn: true };
+        b.rules = previous.rules ?? { requireTurn: false };
         if (previous.robots.every((p) => p < 256 && !b.blocked.includes(p)))
             b.robots = [...previous.robots];
         else
@@ -89,7 +95,7 @@ export function randomArtificial(previous, rng = Math.random) {
                 .map((_, p) => p)
                 .filter((p) => !b.blocked.includes(p))
                 .slice(0, previous.robots.length);
-    } else b.rules = { requireTurn: true };
+    } else b.rules = { requireTurn: false };
     const candidates = [];
     for (let y = 0; y < 16; y++)
         for (let x = 0; x < 16; x++)
