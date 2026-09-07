@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <meta
+            name="description"
+            content="录入碰撞机器人棋盘，校验最少步数，逐步回放最优路线。"
+        />
+        <title>Ricochet Robots Solver</title>
+        <link rel="stylesheet" href="style.css" />
+    </head>
+    <body>
+        <header><h1 class="site-title">Ricochet Robots Solver</h1></header>
+        <main>
+            <section class="workspace">
+                <div class="quick-actions">
+                    <button id="new-round">重新随机局面</button
+                    ><span>保留棋盘 · 重置机器人与目标</span>
+                </div>
+                <div class="board-shell"><div id="board"></div></div>
+                <div class="board-foot">
+                    <span id="hint" hidden></span>
+                </div>
+            </section>
+            <aside>
+                <section class="panel solve-panel">
+                    <div class="panel-title">
+                        <h2>校验最优解</h2>
+                    </div>
+                    <div class="solve-bar">
+                        <div class="settings">
+                            <label
+                                >搜索时间<select id="timeout">
+                                    <option value="10000" selected>
+                                        10 秒
+                                    </option>
+                                    <option value="30000">30 秒</option>
+                                    <option value="120000">2 分钟</option>
+                                </select></label
+                            >
+                        </div>
+                        <button class="primary" id="solve">
+                            计算最少步数 <span>↗</span>
+                        </button>
+                    </div>
+                    <div
+                        id="result"
+                        class="result"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        <span class="status-dot"></span
+                        >准备好了，开始验证这一局。
+                    </div>
+                    <div id="replay" hidden>
+                        <input
+                            id="step-range"
+                            type="range"
+                            min="0"
+                            max="0"
+                            value="0"
+                            aria-label="回放步数"
+                        />
+                        <div class="replay-controls">
+                            <button id="previous" aria-label="上一步">←</button
+                            ><span id="step-label">起点</span
+                            ><button id="next" aria-label="下一步">→</button
+                            ><button id="rewind">起点</button
+                            ><button id="show-all" aria-label="展示完整轨迹">
+                                终点
+                            </button>
+                        </div>
+
+                        <p class="fine">
+                            已走步骤保留轨迹，数字为步序；当前步骤加粗显示。
+                        </p>
+                        <button
+                            id="next-round"
+                            class="full-control next-round"
+                            title="使用完整路线终点的机器人位置，并抽取新目标"
+                        >
+                            下一局 · 保留终点位置 →
+                        </button>
+                        <details class="move-details">
+                            <summary>查看步骤列表</summary>
+                            <ol id="moves"></ol>
+                        </details>
+                    </div>
+                </section>
+                <section class="panel setup-panel">
+                    <div class="panel-title">
+                        <h2>设置局面</h2>
+                        <button id="undo" class="compact" disabled>撤销</button>
+                    </div>
+                    <details class="setup-group">
+                        <summary>棋盘</summary>
+                        <div class="control-grid">
+                            <button id="preset">拼装实体棋盘</button
+                            ><button id="edit-walls" aria-pressed="false">
+                                编辑墙壁</button
+                            ><button id="random-physical">随机实体棋盘</button
+                            ><button id="random-artificial">随机人造棋盘</button
+                            ><button id="rotate-board">整盘旋转 ↻</button
+                            ><button id="empty">空白棋盘</button>
+                            <label class="button" for="import"
+                                >导入棋盘<input
+                                    type="file"
+                                    id="import"
+                                    accept="application/json,.json"
+                                    hidden
+                            /></label>
+                            <button id="export">导出棋盘</button>
+                        </div>
+                        <div class="group-heading">
+                            <label for="count">数量</label>
+                            <select id="count" aria-label="机器人数量">
+                                <option value="1">1 个机器人</option>
+                                <option value="2">2 个机器人</option>
+                                <option value="3">3 个机器人</option>
+                                <option value="4">4 个机器人</option>
+                                <option value="5">5 个机器人</option>
+                            </select>
+                        </div>
+                        <label class="rule-toggle"
+                            ><input
+                                id="require-turn"
+                                type="checkbox"
+                            />目标机器人至少转弯一次（90°）</label
+                        >
+                    </details>
+                    <details class="setup-group" open>
+                        <summary>机器人</summary>
+
+                        <div class="tools" id="tools"></div>
+                        <button class="full-control" id="random-robots">
+                            随机机器人位置
+                        </button>
+                    </details>
+                    <details class="setup-group" open>
+                        <summary>目标</summary>
+                        <div id="target-modes" class="control-grid">
+                            <button id="preset-target">棋盘现有目标</button>
+                            <button id="custom-target">自定义目标</button>
+                        </div>
+                        <p id="current-target" class="fine"></p>
+                        <div id="goal-picker" class="goal-picker" hidden>
+                            <div id="goal-options"></div>
+                        </div>
+                        <div id="custom-target-controls" hidden>
+                            <button
+                                id="place-target"
+                                class="full-control"
+                                aria-pressed="false"
+                            >
+                                在棋盘上放置目标
+                            </button>
+                            <div class="target-row">
+                                <label for="target-color">目标颜色</label
+                                ><select id="target-color">
+                                    <option value="0">红色</option>
+                                    <option value="1">蓝色</option>
+                                    <option value="2">绿色</option>
+                                    <option value="3">黄色</option>
+                                    <option value="4">银色</option>
+                                    <option value="-1">任意机器人</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button id="random-target" class="full-control">
+                            随机抽取目标
+                        </button>
+                    </details>
+                </section>
+            </aside>
+        </main>
+        <footer>
+            <a
+                href="https://github.com/johnnoel/ricochet-robots-solver"
+                target="_blank"
+                rel="noreferrer"
+                >基于 John Noel 的开源项目 · MIT ↗</a
+            >
+        </footer>
+        <div id="toast" role="alert" hidden></div>
+        <dialog id="assembly-dialog" aria-labelledby="assembly-title">
+            <div class="dialog-heading">
+                <div>
+                    <span class="eyebrow">ASSEMBLE YOUR BOARD</span>
+                    <h2 id="assembly-title">对照桌上的板块来拼装</h2>
+                </div>
+                <button id="close-assembly" aria-label="关闭拼装">✕</button>
+            </div>
+            <p class="assembly-help">
+                先选一个位置，再从下方选板面。每组颜色标记各用一块，缺角自动朝向中央；选择已用的组会交换位置。
+            </p>
+            <div id="assembly-slots" class="assembly-slots"></div>
+            <div class="assembly-toolbar">
+                <span id="assembly-slot-label"></span
+                ><button id="cycle-face">同组下一板面</button
+                ><button id="rotate-layout">整盘旋转 ↻</button>
+            </div>
+            <div id="tile-catalog"></div>
+            <p class="assembly-help">
+                预设来自 CodingZeal/robots：12 个普通板面。A4 / B4 / C4 / D4
+                带镜面，当前不开放。编号为开源项目编号，请以缩略图对照实物。
+            </p>
+            <div class="dialog-footer">
+                <button id="cancel-assembly">取消</button
+                ><button id="apply-assembly" class="primary">
+                    使用这块棋盘 →
+                </button>
+            </div>
+        </dialog>
+        <script type="module" src="app.js"></script>
+    </body>
+</html>
