@@ -1,0 +1,32 @@
+name: Deploy
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ricochet-robots-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Stage published files
+        # Only the page, its scripts, data, styles and licenses go live; README and repo files stay out.
+        run: |
+          mkdir site
+          git ls-files -z | grep -zE '^([^/]+\.(html|js|json|css)|LICENSE[^/]*\.txt)$' | xargs -0 cp -t site
+          test -f site/index.html
+          ls site
+      - name: Deploy
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          PLAY_DEPLOY_URL: ${{ secrets.PLAY_DEPLOY_URL }}
+          PLAY_DEPLOY_TOKEN: ${{ secrets.PLAY_DEPLOY_TOKEN }}
+        run: deploy/send_release.sh site "$GITHUB_SHA"
