@@ -72,7 +72,7 @@ function stop() {
     if (worker) {
         worker.terminate();
         worker = null;
-        $("solve").textContent = "计算最少步数 ↗";
+        $("solve").textContent = "计算最少步数";
         $("solve").classList.remove("running");
     }
 }
