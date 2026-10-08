@@ -100,12 +100,36 @@ export function rotateBoard(board) {
         b.layout = [b.layout[3], b.layout[0], b.layout[1], b.layout[2]];
     return validateBoard(b);
 }
-export function targetGlyph(shape) {
-    return (
-        { circle: "●", triangle: "▲", square: "■", hex: "⬢", vortex: "✳" }[
-            shape
-        ] ?? "●"
-    );
+// Target shapes as SVG geometry centred on (x, y); k scales them from the 40-unit board cell.
+export function targetShape(shape, x, y, color, opacity = 1, k = 1) {
+    const f = (v) => +v.toFixed(2),
+        attrs = `fill="${color}" opacity="${opacity}" pointer-events="none"`,
+        ring = (n, r, start) =>
+            Array.from({ length: n }, (_, i) => {
+                const a = start + (i * 2 * Math.PI) / n;
+                return `${f(x + r * k * Math.cos(a))},${f(y + r * k * Math.sin(a))}`;
+            }).join(" ");
+    if (shape === "triangle")
+        return `<polygon points="${f(x)},${f(y - 7.5 * k)} ${f(x + 8.5 * k)},${f(y + 7 * k)} ${f(x - 8.5 * k)},${f(y + 7 * k)}" ${attrs}/>`;
+    if (shape === "square")
+        return `<rect x="${f(x - 6.5 * k)}" y="${f(y - 6.5 * k)}" width="${f(13 * k)}" height="${f(13 * k)}" rx="${f(2 * k)}" ${attrs}/>`;
+    if (shape === "hex") return `<polygon points="${ring(6, 8, -Math.PI / 2)}" ${attrs}/>`;
+    if (shape === "vortex")
+        return `<g stroke="${color}" stroke-width="${f(2.4 * k)}" stroke-linecap="round" opacity="${opacity}" pointer-events="none">${[0, 1, 2, 3]
+            .map((i) => {
+                const dx = 8 * k * Math.cos((i * Math.PI) / 4),
+                    dy = 8 * k * Math.sin((i * Math.PI) / 4);
+                return `<line x1="${f(x - dx)}" y1="${f(y - dy)}" x2="${f(x + dx)}" y2="${f(y + dy)}"/>`;
+            })
+            .join("")}</g>`;
+    if (shape === "circle")
+        return `<circle cx="${f(x)}" cy="${f(y)}" r="${f(7 * k)}" ${attrs}/>`;
+    // A target cell without a printed shape: ring with a centre dot.
+    return `<g pointer-events="none"><circle cx="${f(x)}" cy="${f(y)}" r="${f(7 * k)}" fill="none" stroke="${color}" stroke-width="${f(2 * k)}"/><circle cx="${f(x)}" cy="${f(y)}" r="${f(2.8 * k)}" fill="${color}"/></g>`;
+}
+// The same shapes as a small standalone icon for buttons and labels.
+export function targetIcon(shape, color) {
+    return `<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">${targetShape(shape, 10, 10, color)}</svg>`;
 }
 export function tileSvg(tile, slot = 0) {
     const colors = ["#da4d50", "#397ac7", "#2a9776", "#c89316"],
@@ -146,7 +170,14 @@ export function tileSvg(tile, slot = 0) {
     for (const [r, c, color, shape] of tile.targets) {
         const [x, y] = point(r, c);
         svg.push(
-            `<text x="${x * S + 7.5}" y="${y * S + 11}" text-anchor="middle" font-size="10" fill="${colors[robotIndex[color]] ?? "#34424b"}">${targetGlyph(shape ?? "vortex")}</text>`,
+            targetShape(
+                shape ?? "vortex",
+                x * S + S / 2,
+                y * S + S / 2,
+                colors[robotIndex[color]] ?? "#34424b",
+                1,
+                0.6,
+            ),
         );
     }
     svg.push("</svg>");

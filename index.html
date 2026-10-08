@@ -26,7 +26,7 @@
                     ></div>
                 </div>
                 <p id="board-help" class="visually-hidden">
-                    数字键 1 到 5 选择机器人，方向键移动，Backspace 撤销一步。
+                    思考阶段按回车开始输入解法。输入时数字键 1 到 5 选择机器人，方向键移动，Backspace 撤销一步。
                 </p>
             </section>
             <aside>
@@ -34,6 +34,9 @@
                     <div class="round-head">
                         <p id="goal" class="goal"></p>
                         <p id="count" class="count"></p>
+                    </div>
+                    <div id="think-bar" class="think-bar" hidden>
+                        <span></span>
                     </div>
                     <p id="status" class="status" role="status"></p>
                     <div id="actions" class="actions"></div>
@@ -132,6 +135,15 @@
                                 type="checkbox"
                             />目标机器人至少转弯一次（90°）</label
                         >
+                        <div class="field-row">
+                            <label for="think-limit">思考时间</label>
+                            <select id="think-limit">
+                                <option value="30">30 秒</option>
+                                <option value="60">1 分钟</option>
+                                <option value="120">2 分钟</option>
+                                <option value="0">不限时</option>
+                            </select>
+                        </div>
                         <div class="field-row">
                             <label for="timeout">求解时间上限</label>
                             <select id="timeout">

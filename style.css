@@ -243,9 +243,10 @@ footer a {
     font-size: 0.95rem;
     line-height: 1.4;
 }
-.goal-glyph {
-    font-size: 1.4rem;
-    line-height: 1;
+.goal-glyph svg {
+    display: block;
+    width: 22px;
+    height: 22px;
 }
 .count {
     margin: 0 0 0 auto;
@@ -261,6 +262,26 @@ footer a {
     font-size: 1.9rem;
     line-height: 1;
     font-variant-numeric: tabular-nums;
+}
+.count.urgent strong {
+    color: #b4462f;
+}
+/* Remaining thinking time, shrinking towards zero. */
+.think-bar {
+    height: 4px;
+    margin-top: 10px;
+    border-radius: 2px;
+    background: var(--line);
+    overflow: hidden;
+}
+.think-bar span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.25s linear;
+}
+.think-bar.urgent span {
+    background: #b4462f;
 }
 .status {
     margin: 8px 0 14px;
@@ -462,8 +483,11 @@ summary {
 .goal-buttons small {
     display: block;
 }
-.goal-buttons b {
-    font-size: 1rem;
+.goal-buttons b svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+    margin: 2px auto;
 }
 .goal-buttons small {
     font-size: 0.65rem;

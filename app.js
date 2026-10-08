@@ -23,7 +23,8 @@ import {
     rotateBoard,
     validateLayout,
     tileSvg,
-    targetGlyph,
+    targetShape,
+    targetIcon,
     DEFAULT_LAYOUT,
     SLOT_NAMES,
     GROUPS,
@@ -63,6 +64,11 @@ let optimal = null,
     step = 0,
     roundId = 0,
     timeoutMs = 10000;
+// Each round opens with a thinking phase: a clean board and a countdown before moves can be entered.
+let thinkLimit = 60,
+    thinkStart = 0,
+    thinkUsed = null,
+    thinkTimer = null;
 try {
     const saved = localStorage.getItem("ricochet-lab-v1");
     if (saved) board = validateBoard(JSON.parse(saved));
@@ -73,6 +79,9 @@ try {
     }
     const limit = Number(localStorage.getItem("ricochet-timeout"));
     if ([10000, 30000, 120000].includes(limit)) timeoutMs = limit;
+    const think = localStorage.getItem("ricochet-think");
+    if (think !== null && [0, 30, 60, 120].includes(Number(think)))
+        thinkLimit = Number(think);
 } catch {
     notify("已载入示例；此前保存的棋盘无法读取。");
 }
@@ -95,6 +104,8 @@ function save() {
 const robotName = (r) => (r < 0 ? "任意机器人" : `${COLORS[r]}色机器人`);
 const cellName = (p) =>
     `(${(p % board.size) + 1}, ${Math.floor(p / board.size) + 1})`;
+const clock = (seconds) =>
+    `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 const limitName = () =>
     timeoutMs >= 60000 ? `${timeoutMs / 60000} 分钟` : `${timeoutMs / 1000} 秒`;
 function positions(moves = played) {
@@ -162,6 +173,35 @@ function solveRound() {
         render();
     });
 }
+function thinkElapsed() {
+    return (Date.now() - thinkStart) / 1000;
+}
+function stopThinking() {
+    clearInterval(thinkTimer);
+    thinkTimer = null;
+}
+function tickThinking() {
+    if (phase !== "think") return stopThinking();
+    if (thinkLimit && thinkElapsed() >= thinkLimit) return startInput(true);
+    renderClock();
+}
+function startThinking() {
+    stopThinking();
+    phase = "think";
+    selected = null;
+    thinkStart = Date.now();
+    thinkUsed = null;
+    thinkTimer = setInterval(tickThinking, 250);
+}
+function startInput(timeUp = false) {
+    if (phase !== "think") return;
+    thinkUsed = Math.min(thinkElapsed(), thinkLimit || Infinity);
+    stopThinking();
+    phase = "play";
+    selected = board.target.robot >= 0 ? board.target.robot : null;
+    message = timeUp ? "时间到，开始输入解法。" : "";
+    render();
+}
 function startRound() {
     roundId++;
     hintJob = cancel(hintJob);
@@ -173,6 +213,8 @@ function startRound() {
     lastMove = null;
     step = 0;
     selected = board.target.robot >= 0 ? board.target.robot : null;
+    stopThinking();
+    if (tool === null) startThinking();
     optimal = null;
     optimalStatus = "idle";
     if (tool === null) {
@@ -237,6 +279,7 @@ function undoMove() {
 }
 function restart() {
     hintJob = cancel(hintJob);
+    stopThinking();
     played = [];
     phase = "play";
     hint = null;
@@ -277,6 +320,7 @@ function requestHint() {
 }
 function showAnswer() {
     hintJob = cancel(hintJob);
+    stopThinking();
     phase = "answer";
     hint = null;
     message = "";
@@ -305,9 +349,9 @@ function setStep(value) {
 function goalText() {
     const goal = currentGoal(),
         color = board.target.robot < 0 ? "#394554" : palette[board.target.robot],
-        glyph = goal ? targetGlyph(goal.shape) : "◎",
+        icon = targetIcon(goal?.shape ?? null, color),
         place = goal ? `${SHAPES[goal.shape]}目标` : "目标格";
-    return `<span class="goal-glyph" style="color:${color}" aria-hidden="true">${glyph}</span><span>把${robotName(board.target.robot)}移到${place}${board.rules?.requireTurn ? "，途中至少转弯一次" : ""}</span>`;
+    return `<span class="goal-glyph">${icon}</span><span>把${robotName(board.target.robot)}移到${place}${board.rules?.requireTurn ? "，途中至少转弯一次" : ""}</span>`;
 }
 function statusText() {
     if (tool === "wall")
@@ -316,16 +360,14 @@ function statusText() {
     if (tool) return `点一个格子放置${robotName(Number(tool.split(":")[1]))}。`;
     if (message) return message;
     if (phase === "won") {
-        const n = played.length;
+        const done = `到达目标，用了 ${played.length} 步${thinkUsed === null ? "" : `，思考 ${clock(thinkUsed)}`}。`;
         if (optimalStatus === "optimal") {
             const m = optimal.moves.length;
-            return n === m
-                ? `到达目标，用了 ${n} 步，和最优解一样少。`
-                : `到达目标，用了 ${n} 步。最优解是 ${m} 步。`;
+            return played.length === m
+                ? `${done}和最优解一样少。`
+                : `${done}最优解是 ${m} 步。`;
         }
-        return optimalStatus === "running"
-            ? `到达目标，用了 ${n} 步。正在计算最优步数…`
-            : `到达目标，用了 ${n} 步。`;
+        return optimalStatus === "running" ? `${done}正在计算最优步数…` : done;
     }
     if (phase === "answer") {
         if (optimalStatus === "running") return "正在计算最优解…";
@@ -343,6 +385,10 @@ function statusText() {
     if (optimalStatus === "unsolvable")
         return "这一局无解：目标机器人到不了目标格。换个目标再玩。";
     if (optimalStatus === "error") return optimal.message;
+    if (phase === "think")
+        return thinkLimit
+            ? "先在脑中想好解法，再点「开始输入解法」。倒计时结束会自动开始。"
+            : "先在脑中想好解法，再点「开始输入解法」。";
     if (played.length) {
         const m = played.at(-1);
         return `${robotName(m.robot)}${DIRECTION_NAMES[m.direction]}，停在 ${cellName(m.to)}。`;
@@ -380,6 +426,11 @@ function actionList() {
     }
     if (optimalStatus === "unsolvable")
         return [{ ...next, label: "换个目标", title: "" }];
+    if (phase === "think")
+        return [
+            { action: "answer", label: "看答案" },
+            { action: "start-input", label: "开始输入解法", primary: true },
+        ];
     return [
         { action: "undo-move", label: "撤销", disabled: !played.length },
         { action: "restart", label: "重来", disabled: !played.length },
@@ -396,30 +447,6 @@ function actionList() {
     ];
 }
 
-// Printed target shapes, drawn as geometry so they sit exactly on the cell centre.
-function shapeSvg(shape, x, y, color, opacity) {
-    const attrs = `fill="${color}" opacity="${opacity}" pointer-events="none"`,
-        points = (k, r, start) =>
-            Array.from({ length: k }, (_, i) => {
-                const a = start + (i * 2 * Math.PI) / k;
-                return `${(x + r * Math.cos(a)).toFixed(2)},${(y + r * Math.sin(a)).toFixed(2)}`;
-            }).join(" ");
-    if (shape === "triangle")
-        return `<polygon points="${x},${y - 7.5} ${x + 8.5},${y + 7} ${x - 8.5},${y + 7}" ${attrs}/>`;
-    if (shape === "square")
-        return `<rect x="${x - 6.5}" y="${y - 6.5}" width="13" height="13" rx="2" ${attrs}/>`;
-    if (shape === "hex") return `<polygon points="${points(6, 8, -Math.PI / 2)}" ${attrs}/>`;
-    if (shape === "vortex")
-        return `<g stroke="${color}" stroke-width="2.4" stroke-linecap="round" opacity="${opacity}" pointer-events="none">${[0, 1, 2, 3]
-            .map((i) => {
-                const a = (i * Math.PI) / 4,
-                    dx = (8 * Math.cos(a)).toFixed(2),
-                    dy = (8 * Math.sin(a)).toFixed(2);
-                return `<line x1="${x - dx}" y1="${y - dy}" x2="${x + Number(dx)}" y2="${y + Number(dy)}"/>`;
-            })
-            .join("")}</g>`;
-    return `<circle cx="${x}" cy="${y}" r="7" ${attrs}/>`;
-}
 function boardSvg() {
     const n = board.size,
         editing = tool !== null,
@@ -456,7 +483,7 @@ function boardSvg() {
         const x = PAD + (goal.cell % n) * S + S / 2,
             y = PAD + Math.floor(goal.cell / n) * S + S / 2;
         svg.push(
-            shapeSvg(
+            targetShape(
                 goal.shape,
                 x,
                 y,
@@ -576,15 +603,31 @@ function animateMove() {
     g.style.transition = `transform ${Math.min(320, 110 + cells * 30)}ms cubic-bezier(.2,.8,.3,1)`;
     g.style.transform = "";
 }
+// The thinking clock updates on its own tick without redrawing the board.
+function renderClock() {
+    const elapsed = thinkElapsed(),
+        left = thinkLimit ? Math.max(0, thinkLimit - elapsed) : elapsed,
+        urgent = !!thinkLimit && left <= 10;
+    $("count").innerHTML = `<span>${thinkLimit ? "剩余" : "思考"}</span><strong>${clock(thinkLimit ? Math.ceil(left) : elapsed)}</strong>`;
+    $("count").classList.toggle("urgent", urgent);
+    $("think-bar").hidden = !thinkLimit;
+    $("think-bar").classList.toggle("urgent", urgent);
+    $("think-bar").firstElementChild.style.width = `${thinkLimit ? (left / thinkLimit) * 100 : 0}%`;
+}
 function renderRound() {
     const editing = tool !== null;
     $("round").dataset.phase = editing ? "edit" : phase;
     $("goal").innerHTML = goalText();
     $("count").hidden = editing;
-    $("count").innerHTML =
-        phase === "answer" && optimalStatus === "optimal"
-            ? `<span>最优</span><strong>${optimal.moves.length}</strong><span>步</span>`
-            : `<strong>${played.length}</strong><span>步</span>`;
+    if (phase === "think" && !editing) renderClock();
+    else {
+        $("think-bar").hidden = true;
+        $("count").classList.remove("urgent");
+        $("count").innerHTML =
+            phase === "answer" && optimalStatus === "optimal"
+                ? `<span>最优</span><strong>${optimal.moves.length}</strong><span>步</span>`
+                : `<strong>${played.length}</strong><span>步</span>`;
+    }
     $("status").textContent = statusText();
     const focused = document.activeElement?.closest?.("#actions [data-action]")
         ?.dataset.action;
@@ -634,6 +677,7 @@ function renderSetup() {
     }
     $("require-turn").checked = !!board.rules?.requireTurn;
     $("timeout").value = String(timeoutMs);
+    $("think-limit").value = String(thinkLimit);
     $("rotate-board").disabled = board.size !== 16;
     const selectedGoal = currentGoal(),
         custom = customTarget || !selectedGoal;
@@ -656,7 +700,7 @@ function renderSetup() {
                     (a, b) => shapes.indexOf(a.shape) - shapes.indexOf(b.shape),
                 );
             if (!goals.length) return "";
-            return `<div class="goal-color-row"><span>${robot < 0 ? "任意" : COLORS[robot]}</span><div class="goal-buttons">${goals.map((g) => `<button data-goal="${g.id}" aria-label="${robot < 0 ? "任意" : COLORS[robot]}${SHAPES[g.shape]}" aria-pressed="${!custom && selectedGoal?.id === g.id}" class="${!custom && selectedGoal?.id === g.id ? "active" : ""}" style="--goal-color:${robot < 0 ? "#394554" : palette[robot]}" ${robot >= board.robots.length ? "disabled" : ""}><b>${targetGlyph(g.shape)}</b><small>${SHAPES[g.shape]}</small></button>`).join("")}</div></div>`;
+            return `<div class="goal-color-row"><span>${robot < 0 ? "任意" : COLORS[robot]}</span><div class="goal-buttons">${goals.map((g) => `<button data-goal="${g.id}" aria-label="${robot < 0 ? "任意" : COLORS[robot]}${SHAPES[g.shape]}" aria-pressed="${!custom && selectedGoal?.id === g.id}" class="${!custom && selectedGoal?.id === g.id ? "active" : ""}" style="--goal-color:${robot < 0 ? "#394554" : palette[robot]}" ${robot >= board.robots.length ? "disabled" : ""}><b>${targetIcon(g.shape, robot < 0 ? "#394554" : palette[robot])}</b><small>${SHAPES[g.shape]}</small></button>`).join("")}</div></div>`;
         })
         .join("");
 }
@@ -740,6 +784,7 @@ function init() {
         if (!button || button.disabled) return;
         ({
             "finish-edit": () => setTool(null, false),
+            "start-input": () => startInput(),
             "undo-move": undoMove,
             restart,
             hint: requestHint,
@@ -833,6 +878,13 @@ function init() {
     $("board").onkeydown = (e) => {
         if (tool !== null) return editKey(e);
         if (e.altKey) return;
+        if (phase === "think") {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                startInput();
+            }
+            return;
+        }
         const number = Number(e.key);
         if (Number.isInteger(number) && number >= 1 && number <= board.robots.length) {
             e.preventDefault();
@@ -1050,6 +1102,14 @@ function init() {
     $("require-turn").onchange = (e) => {
         board.rules = { requireTurn: e.target.checked };
         changed();
+    };
+    $("think-limit").onchange = (e) => {
+        thinkLimit = Number(e.target.value);
+        try {
+            localStorage.setItem("ricochet-think", String(thinkLimit));
+        } catch {}
+        if (phase === "think") thinkStart = Date.now();
+        render();
     };
     $("timeout").onchange = (e) => {
         timeoutMs = Number(e.target.value);
