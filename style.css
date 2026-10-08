@@ -10,10 +10,10 @@
     font-synthesis: none;
     color: var(--ink);
     background: var(--page);
-    --ink: #172637;
-    --muted: #5d6d80;
-    --line: #d8e0e7;
-    --page: #edf1f5;
+    --ink: #202b3c;
+    --muted: #657084;
+    --line: #e4e8ef;
+    --page: #fcfcfd;
     --surface: #fff;
     --accent: #146557;
     --accent-ink: #0f4d43;
@@ -107,22 +107,27 @@ main {
     max-width: 1280px;
     margin: 0 auto;
 }
+/* Header matches the game list page: same size, weight and rule below. */
 header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 16px 24px;
+    max-width: none;
+    padding: 30px max(24px, (100% - 1280px) / 2 + 24px);
+    border-bottom: 1px solid var(--line);
 }
 .site-title {
     margin: 0;
-    font-size: 1.4rem;
+    font-size: 19px;
+    letter-spacing: 0.02em;
     font-weight: 650;
+    line-height: 1.4;
 }
 main {
     display: grid;
     gap: 16px;
-    padding: 0 24px 24px;
+    padding: 24px 24px;
 }
 aside {
     min-width: 0;
@@ -284,17 +289,50 @@ footer a {
     background: #b4462f;
 }
 .status {
-    margin: 8px 0 14px;
-    min-height: 3em;
+    margin: 8px 0 0;
     color: var(--muted);
     font-size: 0.875rem;
     line-height: 1.5;
+}
+.status:empty {
+    margin: 0;
+}
+.help-toggle {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 650;
+    line-height: 1;
+}
+.help-toggle[aria-expanded="true"] {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.help {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 9px;
+    background: #f3f6f8;
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.6;
+}
+.help p {
+    margin: 0;
+}
+.help p + p {
+    margin-top: 6px;
 }
 .round-panel[data-phase="won"] .status {
     color: var(--accent-ink);
     font-weight: 600;
 }
 .actions {
+    margin-top: 14px;
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: minmax(0, 1fr);
@@ -623,24 +661,23 @@ dialog::backdrop {
         position: sticky;
         top: 12px;
     }
+    /* Fit the whole board in the window: header, top padding and a bottom margin; the frame shrinks with it. */
     .board-shell {
         padding: 16px;
+        width: min(100%, max(332px, calc(100dvh - 144px)));
     }
-    #board {
-        max-width: max(300px, calc(100dvh - 120px));
+    #moves {
+        max-height: min(46dvh, 420px);
     }
 }
 
 /* Phones and narrow portrait windows: round panel docks at the bottom of the screen. */
 @media (max-width: 859px) and (max-aspect-ratio: 6/5), (max-width: 739px) {
     header {
-        padding: 12px 14px;
-    }
-    .site-title {
-        font-size: 1.2rem;
+        padding: 22px 14px;
     }
     main {
-        padding: 0 10px 16px;
+        padding: 12px 10px 16px;
         gap: 4px;
     }
     .board-shell {
@@ -670,9 +707,11 @@ dialog::backdrop {
         font-size: 1.5rem;
     }
     .status {
-        min-height: 0;
-        margin: 4px 0 10px;
+        margin-top: 4px;
         font-size: 0.8rem;
+    }
+    .actions {
+        margin-top: 10px;
     }
     .panel {
         margin-top: 10px;

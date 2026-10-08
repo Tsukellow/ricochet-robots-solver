@@ -33,12 +33,36 @@
                 <section id="round" class="round-panel" aria-label="本局">
                     <div class="round-head">
                         <p id="goal" class="goal"></p>
+                        <button
+                            id="help-toggle"
+                            class="help-toggle"
+                            aria-expanded="false"
+                            aria-controls="help"
+                            aria-label="玩法说明"
+                        >
+                            ?
+                        </button>
                         <p id="count" class="count"></p>
+                    </div>
+                    <div id="help" class="help" hidden>
+                        <p>
+                            先在脑中想好解法，再点「开始输入解法」。多人玩时，有人报出步数就点「开始倒计时」，倒计时结束自动开始输入。
+                        </p>
+                        <p>
+                            输入时点一个机器人，再点虚线落点或同一行、同一列的格子；也可以按住机器人朝一个方向拖。
+                        </p>
+                        <p>
+                            「提示」给出从当前位置开始的下一步最优走法。「下一局」让机器人留在原地，换一个新目标。
+                        </p>
+                        <p>
+                            键盘：聚焦棋盘后，回车开始输入，T 开始倒计时，1 到 5 选择机器人，方向键移动，Backspace 撤销。
+                        </p>
                     </div>
                     <div id="think-bar" class="think-bar" hidden>
                         <span></span>
                     </div>
                     <p id="status" class="status" role="status"></p>
+                    <p id="announce" class="visually-hidden" aria-live="polite"></p>
                     <div id="actions" class="actions"></div>
                 </section>
                 <section id="moves-panel" class="panel" hidden>
@@ -74,6 +98,9 @@
                             /></label>
                             <button id="export">导出棋盘</button>
                         </div>
+                        <p class="fine">
+                            编辑墙壁时，点格子边缘添加或移除墙壁；键盘用 Shift 加方向键。
+                        </p>
                         <div class="field-row">
                             <label for="robot-count">机器人数量</label>
                             <select id="robot-count">

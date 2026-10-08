@@ -36,7 +36,7 @@ const $ = (id) => document.getElementById(id),
     DIRECTION_NAMES = ["向上", "向右", "向下", "向左"],
     KEYS = ["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"],
     S = 40,
-    PAD = 22,
+    PAD = 3,
     reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const { tiles } = await fetch("./tiles.json").then((r) => r.json());
 function preset() {
@@ -102,8 +102,9 @@ function save() {
     }
 }
 const robotName = (r) => (r < 0 ? "任意机器人" : `${COLORS[r]}色机器人`);
+// Cells are only named for screen readers; the board itself carries no coordinates.
 const cellName = (p) =>
-    `(${(p % board.size) + 1}, ${Math.floor(p / board.size) + 1})`;
+    `第 ${Math.floor(p / board.size) + 1} 行第 ${(p % board.size) + 1} 列`;
 const clock = (seconds) =>
     `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 const limitName = () =>
@@ -264,6 +265,7 @@ function move(r, d) {
         return;
     }
     played.push({ robot: r, direction: d, from, to });
+    $("announce").textContent = `${robotName(r)}${DIRECTION_NAMES[d]}，停在${cellName(to)}。`;
     lastMove = { robot: r, from, to };
     hint = null;
     message = "";
@@ -356,49 +358,33 @@ function goalText() {
         place = goal ? `${SHAPES[goal.shape]}目标` : "目标格";
     return `<span class="goal-glyph">${icon}</span><span>把${robotName(board.target.robot)}移到${place}${board.rules?.requireTurn ? "，途中至少转弯一次" : ""}</span>`;
 }
+// Only results and events go here; how to play lives behind the ? button.
 function statusText() {
-    if (tool === "wall")
-        return "点格子边缘添加或移除墙壁。键盘可用 Shift 加方向键。";
-    if (tool === "target") return "点一个格子放置目标。";
-    if (tool) return `点一个格子放置${robotName(Number(tool.split(":")[1]))}。`;
+    if (tool) return "";
     if (message) return message;
     if (phase === "won") {
-        const done = `到达目标，用了 ${played.length} 步。`;
-        if (optimalStatus === "optimal") {
-            const m = optimal.moves.length;
-            return played.length === m
-                ? `${done}和最优解一样少。`
-                : `${done}最优解是 ${m} 步。`;
-        }
-        return optimalStatus === "running" ? `${done}正在计算最优步数…` : done;
+        if (optimalStatus === "optimal")
+            return played.length === optimal.moves.length
+                ? "到达目标，和最优解一样少。"
+                : `到达目标。最优解 ${optimal.moves.length} 步。`;
+        return optimalStatus === "running"
+            ? "到达目标。正在计算最优步数…"
+            : "到达目标。";
     }
     if (phase === "answer") {
         if (optimalStatus === "running") return "正在计算最优解…";
         if (optimalStatus === "unsolvable") return "这一局无解。";
         if (optimalStatus === "error") return optimal.message;
         if (optimalStatus === "optimal") {
-            const len = optimal.moves.length;
-            if (step === len) return `最优解共 ${len} 步。`;
-            if (step === 0) return "回到起点。";
+            if (step === 0 || step === optimal.moves.length) return "";
             const m = optimal.moves[step - 1];
             return `第 ${step} 步：${robotName(m.robot)}${DIRECTION_NAMES[m.direction]}。`;
         }
-        return `没能在 ${limitName()}内算出最优解，至少需要 ${optimal.lowerBound} 步。可以再算一次，或在设置里延长求解时间。`;
+        return `没能在 ${limitName()}内算出最优解。可以再算一次，或在设置里延长求解时间。`;
     }
-    if (optimalStatus === "unsolvable")
-        return "这一局无解：目标机器人到不了目标格。换个目标再玩。";
+    if (optimalStatus === "unsolvable") return "这一局无解，换个目标再玩。";
     if (optimalStatus === "error") return optimal.message;
-    if (phase === "think")
-        return countdownStart === null
-            ? "先在脑中想解法，想好后点「开始输入解法」。多人玩时，有人报出步数就点「开始倒计时」。"
-            : "倒计时中，结束后自动开始输入解法。";
-    if (played.length) {
-        const m = played.at(-1);
-        return `${robotName(m.robot)}${DIRECTION_NAMES[m.direction]}，停在 ${cellName(m.to)}。`;
-    }
-    if (selected !== null)
-        return `点虚线落点，或按住${robotName(selected)}朝一个方向滑动。`;
-    return "点一个机器人，再选择它要去的方向。";
+    return "";
 }
 function actionList() {
     if (tool) return [{ action: "finish-edit", label: "完成编辑", primary: true }];
@@ -464,12 +450,8 @@ function boardSvg() {
               : positions(),
         svg = [];
     svg.push(
-        `<svg viewBox="0 0 ${n * S + PAD} ${n * S + PAD}" ${editing ? 'role="grid" aria-label="棋盘编辑，方向键选择格子，回车放置；编辑墙壁时 Shift 加方向键切换墙壁"' : 'role="img" aria-label="棋盘"'}><rect x="${PAD}" y="${PAD}" width="${n * S}" height="${n * S}" fill="#f8fafb"/>`,
+        `<svg viewBox="0 0 ${n * S + 2 * PAD} ${n * S + 2 * PAD}" ${editing ? 'role="grid" aria-label="棋盘编辑，方向键选择格子，回车放置；编辑墙壁时 Shift 加方向键切换墙壁"' : 'role="img" aria-label="棋盘"'}><rect x="${PAD}" y="${PAD}" width="${n * S}" height="${n * S}" fill="#f8fafb"/>`,
     );
-    for (let x = 0; x < n; x++)
-        svg.push(
-            `<text x="${PAD + x * S + S / 2}" y="13" text-anchor="middle" fill="#afbfca" font-size="10">${x + 1}</text><text x="9" y="${PAD + x * S + S * 0.6}" text-anchor="middle" fill="#afbfca" font-size="10">${x + 1}</text>`,
-        );
     for (let p = 0; p < n * n; p++) {
         const x = PAD + (p % n) * S,
             y = PAD + Math.floor(p / n) * S,
@@ -479,7 +461,7 @@ function boardSvg() {
                   ? "#f0f4f7"
                   : "#f8fafb",
             focus = editing
-                ? ` role="gridcell" tabindex="${p === 0 ? "0" : "-1"}" aria-label="第 ${Math.floor(p / n) + 1} 行，第 ${(p % n) + 1} 列${robots.includes(p) ? "，" + robotName(robots.indexOf(p)) : ""}${p === board.target.cell ? "，目标" : ""}"`
+                ? ` role="gridcell" tabindex="${p === 0 ? "0" : "-1"}" aria-label="${cellName(p)}${robots.includes(p) ? "，" + robotName(robots.indexOf(p)) : ""}${p === board.target.cell ? "，目标" : ""}"`
                 : "";
         svg.push(
             `<rect x="${x}" y="${y}" width="${S}" height="${S}" fill="${fill}" stroke="#d9e1e6" stroke-width=".7" data-cell="${p}"${focus}/>`,
@@ -494,7 +476,7 @@ function boardSvg() {
                 x,
                 y,
                 goal.robot < 0 ? "#394554" : palette[goal.robot],
-                goal.cell === board.target.cell ? 1 : 0.45,
+                goal.cell === board.target.cell ? 1 : editing ? 0.45 : 0.2,
             ),
         );
     }
@@ -531,10 +513,21 @@ function boardSvg() {
     );
     const route = editing ? [] : answer ? optimal.moves : played,
         shown = editing ? 0 : answer ? step : played.length;
+    const labels = [];
     for (const m of trajectory(route, shown, n, PAD, S)) {
         const color = palette[m.robot],
-            cx = (m.x1 + m.x2) / 2,
-            cy = (m.y1 + m.y2) / 2;
+            spots = [0.5, 0.3, 0.7, 0.2, 0.8, 0.4, 0.6].map((f) => [
+                m.x1 + (m.x2 - m.x1) * f,
+                m.y1 + (m.y2 - m.y1) * f,
+            ]),
+            clearance = ([x, y]) =>
+                Math.min(Infinity, ...labels.map(([a, b]) => Math.hypot(x - a, y - b))),
+            [cx, cy] =
+                spots.find((spot) => clearance(spot) >= 19) ??
+                spots.reduce((best, spot) =>
+                    clearance(spot) > clearance(best) ? spot : best,
+                );
+        labels.push([cx, cy]);
         svg.push(
             `<g pointer-events="none"><line x1="${m.x1}" y1="${m.y1}" x2="${m.x2}" y2="${m.y2}" stroke="${color}" stroke-width="${m.current ? 4.5 : 2.6}" opacity="${m.current ? 0.95 : 0.55}" stroke-linecap="round" marker-end="url(#arrow-${m.robot})"/><circle cx="${cx}" cy="${cy}" r="8.5" fill="#fff" stroke="${color}" stroke-width="${m.current ? 2.2 : 1}"/><text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-size="10" font-weight="700" fill="${color}">${m.number}</text></g>`,
         );
@@ -553,7 +546,7 @@ function boardSvg() {
                 uy = Math.sign(gy - fy);
             // The dashed line runs from the robot's ring to the edge of the landing outline.
             svg.push(
-                `<g class="ghost${hinted ? " hinted" : ""}" data-move="${d}" role="button" aria-label="${robotName(selected)}${DIRECTION_NAMES[d]}，停在 ${cellName(to)}"><line x1="${fx + ux * 17}" y1="${fy + uy * 17}" x2="${gx - ux * 15}" y2="${gy - uy * 15}" stroke="${color}" stroke-width="${hinted ? 3.5 : 2}" stroke-dasharray="${hinted ? "7 5" : "3 6"}" stroke-linecap="round" opacity="${hinted ? 0.95 : 0.6}" pointer-events="none"/><rect x="${gx - 15}" y="${gy - 15}" width="30" height="30" rx="9" fill="${color}" fill-opacity="${hinted ? 0.28 : 0.12}" stroke="${color}" stroke-width="2" stroke-dasharray="4 3"/></g>`,
+                `<g class="ghost${hinted ? " hinted" : ""}" data-move="${d}" role="button" aria-label="${robotName(selected)}${DIRECTION_NAMES[d]}，停在 ${cellName(to)}"><line x1="${fx + ux * 17}" y1="${fy + uy * 17}" x2="${gx - ux * 15}" y2="${gy - uy * 15}" stroke="${color}" stroke-width="${hinted ? 3.5 : 2}" stroke-dasharray="${hinted ? "7 5" : "3 6"}" stroke-linecap="round" opacity="${hinted ? 0.95 : 0.6}" pointer-events="none"/><rect x="${gx - 15}" y="${gy - 15}" width="30" height="30" rx="9" fill="${color}" fill-opacity="${hinted ? 0.28 : 0.12}" stroke="${color}" stroke-width="2" stroke-dasharray="4 3"/><rect x="${gx - S / 2}" y="${gy - S / 2}" width="${S}" height="${S}" fill="transparent"/></g>`,
             );
         }
     }
@@ -561,7 +554,7 @@ function boardSvg() {
         const [x, y] = center(p),
             active = !editing && phase === "play" && selected === i;
         svg.push(
-            `<g class="robot${active ? " selected" : ""}" data-robot="${i}"${!editing && phase === "play" ? ` role="button" aria-label="${robotName(i)}，${cellName(p)}" aria-pressed="${active}"` : ' pointer-events="none"'}>${active ? `<rect x="${x - 17}" y="${y - 17}" width="34" height="34" rx="11" fill="none" stroke="${palette[i]}" stroke-width="2.5"/>` : ""}<rect x="${x - 12}" y="${y - 12}" width="24" height="24" rx="7" fill="${palette[i]}" stroke="#fff" stroke-width="2"/><text x="${x}" y="${y + 4}" fill="${i === 3 ? "#3e310b" : "#fff"}" text-anchor="middle" font-size="11" font-weight="700" pointer-events="none">${LETTERS[i]}</text></g>`,
+            `<g class="robot${active ? " selected" : ""}" data-robot="${i}"${!editing && phase === "play" ? ` role="button" aria-label="${robotName(i)}，${cellName(p)}" aria-pressed="${active}"` : ' pointer-events="none"'}><rect x="${x - S / 2}" y="${y - S / 2}" width="${S}" height="${S}" fill="transparent"/>${active ? `<rect x="${x - 17}" y="${y - 17}" width="34" height="34" rx="11" fill="none" stroke="${palette[i]}" stroke-width="2.5"/>` : ""}<rect x="${x - 12}" y="${y - 12}" width="24" height="24" rx="7" fill="${palette[i]}" stroke="#fff" stroke-width="2"/><text x="${x}" y="${y + 4}" fill="${i === 3 ? "#3e310b" : "#fff"}" text-anchor="middle" font-size="11" font-weight="700" pointer-events="none">${LETTERS[i]}</text></g>`,
         );
     });
     if (tool === "wall")
@@ -658,7 +651,7 @@ function renderRound() {
     $("moves-title").textContent = answer ? "最优解" : "你的走法";
     $("moves").innerHTML = list
         .map((m, i) => {
-            const body = `<span class="move-no">${i + 1}</span><span class="swatch" style="--color:${palette[m.robot]}"></span>${COLORS[m.robot]}色${DIRECTION_NAMES[m.direction]}<small>${cellName(m.to)}</small>`;
+            const body = `<span class="move-no">${i + 1}</span><span class="swatch" style="--color:${palette[m.robot]}"></span>${COLORS[m.robot]}色${DIRECTION_NAMES[m.direction]}`;
             return answer
                 ? `<li><button data-step="${i + 1}" class="${i + 1 === step ? "selected" : ""}" aria-current="${i + 1 === step}">${body}</button></li>`
                 : `<li>${body}</li>`;
@@ -699,7 +692,7 @@ function renderSetup() {
     $("custom-target").setAttribute("aria-pressed", String(custom));
     $("current-target").textContent = !custom
         ? `本轮目标：${selectedGoal.robot < 0 ? "任意颜色" : COLORS[selectedGoal.robot] + "色"}${SHAPES[selectedGoal.shape]}`
-        : `自定义目标：${board.target.robot < 0 ? "任意颜色" : COLORS[board.target.robot] + "色"}，位置 ${cellName(board.target.cell)}`;
+        : `自定义目标：${board.target.robot < 0 ? "任意机器人" : COLORS[board.target.robot] + "色"}`;
     const shapes = ["circle", "triangle", "square", "hex", "vortex"];
     $("goal-options").innerHTML = [0, 1, 2, 3, -1]
         .map((robot) => {
@@ -788,6 +781,11 @@ function trackRoundPanel() {
 function init() {
     startRound();
     trackRoundPanel();
+    $("help-toggle").onclick = () => {
+        const open = $("help").hidden;
+        $("help").hidden = !open;
+        $("help-toggle").setAttribute("aria-expanded", String(open));
+    };
     $("actions").onclick = (e) => {
         const button = e.target.closest("[data-action]");
         if (!button || button.disabled) return;
