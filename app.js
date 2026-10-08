@@ -13,9 +13,10 @@ import {
     DIRS,
     COLORS,
     neighbor,
+    slide,
+    isGoal,
+    afterTurn,
 } from "./engine.js";
-const $ = (id) => document.getElementById(id),
-    palette = ["#da4d50", "#397ac7", "#2a9776", "#e2ac29", "#8b96a7"];
 import {
     assemble,
     replaceTile,
@@ -28,20 +29,40 @@ import {
     GROUPS,
     SHAPES,
 } from "./assembly.js";
+const $ = (id) => document.getElementById(id),
+    palette = ["#da4d50", "#397ac7", "#2a9776", "#e2ac29", "#8b96a7"],
+    LETTERS = ["R", "B", "G", "Y", "S"],
+    DIRECTION_NAMES = ["向上", "向右", "向下", "向左"],
+    KEYS = ["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"],
+    S = 40,
+    PAD = 22,
+    reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const { tiles } = await fetch("./tiles.json").then((r) => r.json());
 function preset() {
     return assemble(DEFAULT_LAYOUT, tiles);
 }
 let draftLayout = [...DEFAULT_LAYOUT],
     activeSlot = 0;
+// The board holds the round's starting position; the player's moves are applied on top of it.
 let board = preset(),
-    tool = "robot:0",
+    tool = null,
     customTarget = false,
-    worker = null,
-    solution = null,
-    step = 0,
-    lowerBound = 0,
     toastTimer;
+let played = [],
+    selected = null,
+    phase = "play",
+    message = "",
+    hint = null,
+    lastMove = null,
+    swiped = false,
+    drag = null;
+let optimal = null,
+    optimalStatus = "idle",
+    optimalJob = null,
+    hintJob = null,
+    step = 0,
+    roundId = 0,
+    timeoutMs = 10000;
 try {
     const saved = localStorage.getItem("ricochet-lab-v1");
     if (saved) board = validateBoard(JSON.parse(saved));
@@ -50,13 +71,16 @@ try {
         localStorage.setItem("ricochet-lab-v1", JSON.stringify(board));
         localStorage.setItem("ricochet-default-rules-v2", "applied");
     }
+    const limit = Number(localStorage.getItem("ricochet-timeout"));
+    if ([10000, 30000, 120000].includes(limit)) timeoutMs = limit;
 } catch {
     notify("已载入示例；此前保存的棋盘无法读取。");
 }
 let previousBoard = structuredClone(board);
 const undoHistory = [];
-function notify(message) {
-    $("toast").textContent = message;
+
+function notify(text) {
+    $("toast").textContent = text;
     $("toast").hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => ($("toast").hidden = true), 4500);
@@ -68,13 +92,99 @@ function save() {
         notify("无法保存当前局面，请导出棋盘以便下次使用。");
     }
 }
-function stop() {
-    if (worker) {
+const robotName = (r) => (r < 0 ? "任意机器人" : `${COLORS[r]}色机器人`);
+const cellName = (p) =>
+    `(${(p % board.size) + 1}, ${Math.floor(p / board.size) + 1})`;
+const limitName = () =>
+    timeoutMs >= 60000 ? `${timeoutMs / 60000} 分钟` : `${timeoutMs / 1000} 秒`;
+function positions(moves = played) {
+    const p = [...board.robots];
+    for (const m of moves) p[m.robot] = m.to;
+    return p;
+}
+function turnsAfter(moves) {
+    const t = board.robots.map(() => 0);
+    for (const m of moves) t[m.robot] = afterTurn(t[m.robot], m.direction);
+    return t;
+}
+function currentGoal() {
+    return board.goals?.find(
+        (g) => g.cell === board.target.cell && g.robot === board.target.robot,
+    );
+}
+
+// Solver runs in a worker; each job reports once and is discarded.
+function solveJob(input, onDone) {
+    const worker = new Worker(new URL("./worker.js", import.meta.url), {
+            type: "module",
+        }),
+        job = { worker, done: false };
+    const finish = (result) => {
         worker.terminate();
-        worker = null;
-        $("solve").textContent = "计算最少步数";
-        $("solve").classList.remove("running");
+        job.done = true;
+        onDone(result);
+    };
+    worker.onmessage = ({ data }) => {
+        if (data.type === "progress") return;
+        finish(
+            data.type === "error"
+                ? { status: "error", message: data.message }
+                : data.result,
+        );
+    };
+    worker.onerror = () =>
+        finish({
+            status: "error",
+            message: "求解器启动失败，请刷新页面重试。",
+        });
+    worker.postMessage({
+        board: input,
+        options: { maxMs: timeoutMs, maxDepth: 80 },
+    });
+    return job;
+}
+function cancel(job) {
+    if (job && !job.done) job.worker.terminate();
+    return null;
+}
+function solveRound() {
+    optimalJob = cancel(optimalJob);
+    const id = roundId;
+    optimal = null;
+    optimalStatus = "running";
+    optimalJob = solveJob(structuredClone(board), (result) => {
+        if (id !== roundId) return;
+        optimalJob = null;
+        optimal = result;
+        optimalStatus = result.status;
+        if (phase === "answer" && result.status === "optimal")
+            step = result.moves.length;
+        render();
+    });
+}
+function startRound() {
+    roundId++;
+    hintJob = cancel(hintJob);
+    optimalJob = cancel(optimalJob);
+    played = [];
+    phase = "play";
+    message = "";
+    hint = null;
+    lastMove = null;
+    step = 0;
+    selected = board.target.robot >= 0 ? board.target.robot : null;
+    optimal = null;
+    optimalStatus = "idle";
+    if (tool === null) {
+        try {
+            validateBoard(board);
+            solveRound();
+        } catch (e) {
+            optimal = { status: "error", message: e.message };
+            optimalStatus = "error";
+        }
     }
+    render();
 }
 function changed() {
     if (JSON.stringify(board) !== JSON.stringify(previousBoard)) {
@@ -82,62 +192,263 @@ function changed() {
         if (undoHistory.length > 20) undoHistory.shift();
         previousBoard = structuredClone(board);
     }
-    stop();
-    solution = null;
-    step = 0;
-    lowerBound = 0;
-    $("result").textContent = "局面已更新，可以开始计算。";
-    $("replay").hidden = true;
     save();
+    startRound();
+}
+function loadBoard(value) {
+    board = validateBoard(value);
+    customTarget = false;
+    tool = null;
+    changed();
+}
+function setTool(value, toggle = true) {
+    tool = toggle && tool === value ? null : value;
+    startRound();
+}
+
+function move(r, d) {
+    if (tool !== null || phase !== "play" || r === null) return;
+    const pos = positions(),
+        from = pos[r],
+        to = slide(board, pos, r, d);
+    selected = r;
+    hintJob = cancel(hintJob);
+    if (to === from) {
+        message = `${robotName(r)}${DIRECTION_NAMES[d]}走不动。`;
+        render();
+        return;
+    }
+    played.push({ robot: r, direction: d, from, to });
+    lastMove = { robot: r, from, to };
+    hint = null;
+    message = "";
+    if (isGoal(board, positions(), turnsAfter(played))) phase = "won";
     render();
 }
-function displayedRobots() {
-    const p = [...board.robots];
-    if (solution)
-        for (const m of solution.moves.slice(0, step)) p[m.robot] = m.to;
-    return p;
+function undoMove() {
+    if (!played.length || (phase !== "play" && phase !== "won")) return;
+    hintJob = cancel(hintJob);
+    const m = played.pop();
+    selected = m.robot;
+    phase = "play";
+    hint = null;
+    message = "";
+    render();
 }
-function render() {
+function restart() {
+    hintJob = cancel(hintJob);
+    played = [];
+    phase = "play";
+    hint = null;
+    message = "";
+    selected = board.target.robot >= 0 ? board.target.robot : null;
+    render();
+}
+function useHint(m) {
+    hint = m;
+    selected = m.robot;
+    message = `提示：${robotName(m.robot)}${DIRECTION_NAMES[m.direction]}。`;
+    render();
+}
+function requestHint() {
+    if (phase !== "play" || hintJob) return;
+    if (!played.length && optimalStatus === "optimal")
+        return useHint(optimal.moves[0]);
+    const input = structuredClone(board),
+        id = roundId,
+        count = played.length;
+    input.robots = positions();
+    message = "正在计算提示…";
+    hintJob = solveJob(input, (result) => {
+        hintJob = null;
+        if (id !== roundId || count !== played.length || phase !== "play")
+            return render();
+        if (result.status === "optimal" && result.moves.length)
+            return useHint(result.moves[0]);
+        message =
+            result.status === "unsolvable"
+                ? "从当前位置已经到不了目标，可以撤销几步或重来。"
+                : result.status === "error"
+                  ? result.message
+                  : `没能在 ${limitName()}内算出提示，可以在设置里延长求解时间。`;
+        render();
+    });
+    render();
+}
+function showAnswer() {
+    hintJob = cancel(hintJob);
+    phase = "answer";
+    hint = null;
+    message = "";
+    if (optimalStatus === "optimal") step = optimal.moves.length;
+    render();
+}
+function goNext() {
+    const robots =
+        phase === "won"
+            ? positions()
+            : phase === "answer" && optimalStatus === "optimal"
+              ? positions(optimal.moves)
+              : [...board.robots];
+    try {
+        loadBoard(nextRound(board, robots));
+    } catch (error) {
+        notify(error.message);
+    }
+}
+function setStep(value) {
+    if (optimalStatus !== "optimal") return;
+    step = Math.max(0, Math.min(optimal.moves.length, value));
+    render();
+}
+
+function goalText() {
+    const goal = currentGoal(),
+        color = board.target.robot < 0 ? "#394554" : palette[board.target.robot],
+        glyph = goal ? targetGlyph(goal.shape) : "◎",
+        place = goal ? `${SHAPES[goal.shape]}目标` : "目标格";
+    return `<span class="goal-glyph" style="color:${color}" aria-hidden="true">${glyph}</span><span>把${robotName(board.target.robot)}移到${place}${board.rules?.requireTurn ? "，途中至少转弯一次" : ""}</span>`;
+}
+function statusText() {
+    if (tool === "wall")
+        return "点格子边缘添加或移除墙壁。键盘可用 Shift 加方向键。";
+    if (tool === "target") return "点一个格子放置目标。";
+    if (tool) return `点一个格子放置${robotName(Number(tool.split(":")[1]))}。`;
+    if (message) return message;
+    if (phase === "won") {
+        const n = played.length;
+        if (optimalStatus === "optimal") {
+            const m = optimal.moves.length;
+            return n === m
+                ? `到达目标，用了 ${n} 步，和最优解一样少。`
+                : `到达目标，用了 ${n} 步。最优解是 ${m} 步。`;
+        }
+        return optimalStatus === "running"
+            ? `到达目标，用了 ${n} 步。正在计算最优步数…`
+            : `到达目标，用了 ${n} 步。`;
+    }
+    if (phase === "answer") {
+        if (optimalStatus === "running") return "正在计算最优解…";
+        if (optimalStatus === "unsolvable") return "这一局无解。";
+        if (optimalStatus === "error") return optimal.message;
+        if (optimalStatus === "optimal") {
+            const len = optimal.moves.length;
+            if (step === len) return `最优解共 ${len} 步。`;
+            if (step === 0) return "回到起点。";
+            const m = optimal.moves[step - 1];
+            return `第 ${step} 步：${robotName(m.robot)}${DIRECTION_NAMES[m.direction]}。`;
+        }
+        return `没能在 ${limitName()}内算出最优解，至少需要 ${optimal.lowerBound} 步。可以再算一次，或在设置里延长求解时间。`;
+    }
+    if (optimalStatus === "unsolvable")
+        return "这一局无解：目标机器人到不了目标格。换个目标再玩。";
+    if (optimalStatus === "error") return optimal.message;
+    if (played.length) {
+        const m = played.at(-1);
+        return `${robotName(m.robot)}${DIRECTION_NAMES[m.direction]}，停在 ${cellName(m.to)}。`;
+    }
+    if (selected !== null)
+        return `点虚线落点，或按住${robotName(selected)}朝一个方向滑动。`;
+    return "点一个机器人，再选择它要去的方向。";
+}
+function actionList() {
+    if (tool) return [{ action: "finish-edit", label: "完成编辑", primary: true }];
+    const next = {
+        action: "next",
+        label: "下一局",
+        primary: true,
+        title: "机器人留在现在的位置，换一个新目标",
+    };
+    if (phase === "won")
+        return [{ action: "answer", label: "看最优解" }, next];
+    if (phase === "answer") {
+        if (optimalStatus === "optimal")
+            return [
+                { action: "prev", label: "上一步", disabled: step === 0 },
+                {
+                    action: "forward",
+                    label: "下一步",
+                    disabled: step === optimal.moves.length,
+                },
+                { action: "restart", label: "重新挑战" },
+                next,
+            ];
+        const back = { action: "resume", label: "返回游戏" };
+        return optimalStatus === "running"
+            ? [back, next]
+            : [{ action: "resolve", label: "再算一次" }, back, next];
+    }
+    if (optimalStatus === "unsolvable")
+        return [{ ...next, label: "换个目标", title: "" }];
+    return [
+        { action: "undo-move", label: "撤销", disabled: !played.length },
+        { action: "restart", label: "重来", disabled: !played.length },
+        {
+            action: "hint",
+            label: hintJob ? "计算中" : "提示",
+            disabled: !!hintJob || optimalStatus === "error",
+        },
+        {
+            action: "answer",
+            label: "看答案",
+            disabled: optimalStatus === "error",
+        },
+    ];
+}
+
+function boardSvg() {
     const n = board.size,
-        robots = displayedRobots(),
-        S = 40,
-        pad = 22,
+        editing = tool !== null,
+        answer = phase === "answer" && optimalStatus === "optimal",
+        robots = editing
+            ? board.robots
+            : answer
+              ? positions(optimal.moves.slice(0, step))
+              : positions(),
         svg = [];
     svg.push(
-        `<svg viewBox="0 0 ${n * S + pad} ${n * S + pad}" role="grid" aria-label="棋盘，使用方向键选择格子，回车放置；编辑墙壁时 Shift 加方向键切换墙壁"><rect x="${pad}" y="${pad}" width="${n * S}" height="${n * S}" fill="#f8fafb"/>`,
+        `<svg viewBox="0 0 ${n * S + PAD} ${n * S + PAD}" ${editing ? 'role="grid" aria-label="棋盘编辑，方向键选择格子，回车放置；编辑墙壁时 Shift 加方向键切换墙壁"' : 'role="img" aria-label="棋盘"'}><rect x="${PAD}" y="${PAD}" width="${n * S}" height="${n * S}" fill="#f8fafb"/>`,
     );
     for (let x = 0; x < n; x++)
         svg.push(
-            `<text x="${pad + x * S + S / 2}" y="13" text-anchor="middle" fill="#afbfca" font-size="10">${x + 1}</text><text x="9" y="${pad + x * S + S * 0.6}" text-anchor="middle" fill="#afbfca" font-size="10">${x + 1}</text>`,
+            `<text x="${PAD + x * S + S / 2}" y="13" text-anchor="middle" fill="#afbfca" font-size="10">${x + 1}</text><text x="9" y="${PAD + x * S + S * 0.6}" text-anchor="middle" fill="#afbfca" font-size="10">${x + 1}</text>`,
         );
     for (let p = 0; p < n * n; p++) {
-        const x = pad + (p % n) * S,
-            y = pad + Math.floor(p / n) * S;
+        const x = PAD + (p % n) * S,
+            y = PAD + Math.floor(p / n) * S,
+            fill = board.blocked.includes(p)
+                ? "#263b48"
+                : ((p % n) + Math.floor(p / n)) % 2
+                  ? "#f0f4f7"
+                  : "#f8fafb",
+            focus = editing
+                ? ` role="gridcell" tabindex="${p === 0 ? "0" : "-1"}" aria-label="第 ${Math.floor(p / n) + 1} 行，第 ${(p % n) + 1} 列${robots.includes(p) ? "，" + robotName(robots.indexOf(p)) : ""}${p === board.target.cell ? "，目标" : ""}"`
+                : "";
         svg.push(
-            `<rect x="${x}" y="${y}" width="${S}" height="${S}" fill="${board.blocked.includes(p) ? "#263b48" : ((p % n) + Math.floor(p / n)) % 2 ? "#f0f4f7" : "#f8fafb"}" stroke="#d9e1e6" stroke-width=".7" role="gridcell" tabindex="${p === 0 ? "0" : "-1"}" data-cell="${p}" aria-label="第 ${Math.floor(p / n) + 1} 行，第 ${(p % n) + 1} 列${robots.includes(p) ? "，" + COLORS[robots.indexOf(p)] + "机器人" : ""}${p === board.target.cell ? "，目标" : ""}"/>`,
+            `<rect x="${x}" y="${y}" width="${S}" height="${S}" fill="${fill}" stroke="#d9e1e6" stroke-width=".7" data-cell="${p}"${focus}/>`,
         );
     }
     for (const goal of board.goals ?? []) {
-        const x = pad + (goal.cell % n) * S + S / 2,
-            y = pad + Math.floor(goal.cell / n) * S + S / 2;
+        const x = PAD + (goal.cell % n) * S + S / 2,
+            y = PAD + Math.floor(goal.cell / n) * S + S / 2;
         svg.push(
-            `<text x="${x}" y="${y + 6}" text-anchor="middle" fill="${goal.robot < 0 ? "#394554" : palette[goal.robot]}" font-size="21" opacity="${goal.cell === board.target.cell ? 1 : 0.65}" pointer-events="none">${targetGlyph(goal.shape)}</text>`,
+            `<text x="${x}" y="${y + 6}" text-anchor="middle" fill="${goal.robot < 0 ? "#394554" : palette[goal.robot]}" font-size="21" opacity="${goal.cell === board.target.cell ? 1 : 0.45}" pointer-events="none">${targetGlyph(goal.shape)}</text>`,
         );
     }
     const t = board.target.cell,
-        tx = pad + (t % n) * S + S / 2,
-        ty = pad + Math.floor(t / n) * S + S / 2,
+        tx = PAD + (t % n) * S + S / 2,
+        ty = PAD + Math.floor(t / n) * S + S / 2,
         c = board.target.robot < 0 ? "#394554" : palette[board.target.robot];
     svg.push(
-        `<g pointer-events="none"><circle cx="${tx}" cy="${ty}" r="13" fill="none" stroke="${c}" stroke-width="3"/><circle cx="${tx}" cy="${ty}" r="5" fill="${c}"/></g>`,
+        `<g pointer-events="none" class="${phase === "won" && !editing ? "target reached" : "target"}"><circle cx="${tx}" cy="${ty}" r="16" fill="${c}" opacity="0" class="target-glow"/><circle cx="${tx}" cy="${ty}" r="13" fill="none" stroke="${c}" stroke-width="3"/><circle cx="${tx}" cy="${ty}" r="5" fill="${c}"/></g>`,
     );
     for (let p = 0; p < n * n; p++)
         for (let d = 0; d < 4; d++) {
             const q = neighbor(p, d, n);
             if (q >= 0 && q < p) continue;
-            const x = pad + (p % n) * S,
-                y = pad + Math.floor(p / n) * S,
-                ends = [
+            const x = PAD + (p % n) * S,
+                y = PAD + Math.floor(p / n) * S,
+                e = [
                     [x, y, x + S, y],
                     [x + S, y, x + S, y + S],
                     [x, y + S, x + S, y + S],
@@ -145,27 +456,46 @@ function render() {
                 ][d];
             if (board.walls[p] & DIRS[d].bit)
                 svg.push(
-                    `<line x1="${ends[0]}" y1="${ends[1]}" x2="${ends[2]}" y2="${ends[3]}" stroke="#263b48" stroke-width="4" stroke-linecap="round" pointer-events="none"/>`,
+                    `<line x1="${e[0]}" y1="${e[1]}" x2="${e[2]}" y2="${e[3]}" stroke="#263b48" stroke-width="4" stroke-linecap="round" pointer-events="none"/>`,
                 );
         }
-    if (solution && step > 0) {
+    const center = (p) => [
+        PAD + (p % n) * S + S / 2,
+        PAD + Math.floor(p / n) * S + S / 2,
+    ];
+    svg.push(
+        `<defs>${palette.map((color, i) => `<marker id="arrow-${i}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="${color}"/></marker>`).join("")}</defs>`,
+    );
+    const route = editing ? [] : answer ? optimal.moves : played,
+        shown = editing ? 0 : answer ? step : played.length;
+    for (const m of trajectory(route, shown, n, PAD, S)) {
+        const color = palette[m.robot],
+            cx = (m.x1 + m.x2) / 2,
+            cy = (m.y1 + m.y2) / 2;
         svg.push(
-            `<defs>${palette.map((color, i) => `<marker id="arrow-${i}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="${color}"/></marker>`).join("")}</defs>`,
+            `<g pointer-events="none"><line x1="${m.x1}" y1="${m.y1}" x2="${m.x2}" y2="${m.y2}" stroke="${color}" stroke-width="${m.current ? 4.5 : 2.6}" opacity="${m.current ? 0.95 : 0.55}" stroke-linecap="round" marker-end="url(#arrow-${m.robot})"/><circle cx="${cx}" cy="${cy}" r="8.5" fill="#fff" stroke="${color}" stroke-width="${m.current ? 2.2 : 1}"/><text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-size="10" font-weight="700" fill="${color}">${m.number}</text></g>`,
         );
-        for (const m of trajectory(solution.moves, step, n, pad, S)) {
-            const color = palette[m.robot],
-                cx = (m.x1 + m.x2) / 2,
-                cy = (m.y1 + m.y2) / 2;
+    }
+    // Landing spots for the selected robot: tapping one moves the robot there.
+    if (!editing && phase === "play" && selected !== null) {
+        const from = robots[selected],
+            [fx, fy] = center(from),
+            color = palette[selected];
+        for (let d = 0; d < 4; d++) {
+            const to = slide(board, robots, selected, d);
+            if (to === from) continue;
+            const [gx, gy] = center(to),
+                hinted = hint?.robot === selected && hint.direction === d;
             svg.push(
-                `<g pointer-events="none" data-trace-step="${m.number}"><line x1="${m.x1}" y1="${m.y1}" x2="${m.x2}" y2="${m.y2}" stroke="${color}" stroke-width="${m.current ? 5 : 2.8}" opacity="${m.current ? 1 : 0.62}" stroke-linecap="round" marker-end="url(#arrow-${m.robot})"/><circle cx="${cx}" cy="${cy}" r="9" fill="#fff" stroke="${color}" stroke-width="${m.current ? 2.5 : 1}"/><text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-size="10" font-weight="700" fill="${color}">${m.number}</text></g>`,
+                `<g class="ghost${hinted ? " hinted" : ""}" data-move="${d}" role="button" aria-label="${robotName(selected)}${DIRECTION_NAMES[d]}，停在 ${cellName(to)}"><line x1="${fx}" y1="${fy}" x2="${gx}" y2="${gy}" stroke="${color}" stroke-width="${hinted ? 3.5 : 2}" stroke-dasharray="${hinted ? "7 5" : "3 6"}" stroke-linecap="round" opacity="${hinted ? 0.95 : 0.6}" pointer-events="none"/><rect x="${gx - 15}" y="${gy - 15}" width="30" height="30" rx="9" fill="${color}" fill-opacity="${hinted ? 0.28 : 0.12}" stroke="${color}" stroke-width="2" stroke-dasharray="4 3"/></g>`,
             );
         }
     }
     robots.forEach((p, i) => {
-        const x = pad + (p % n) * S + S / 2,
-            y = pad + Math.floor(p / n) * S + S / 2;
+        const [x, y] = center(p),
+            active = !editing && phase === "play" && selected === i;
         svg.push(
-            `<g pointer-events="none"><rect x="${x - 12}" y="${y - 12}" width="24" height="24" rx="7" fill="${palette[i]}" stroke="#fff" stroke-width="2"/><text x="${x}" y="${y + 4}" fill="${i === 3 ? "#3e310b" : "#fff"}" text-anchor="middle" font-size="11" font-weight="700">${["R", "B", "G", "Y", "S"][i]}</text></g>`,
+            `<g class="robot${active ? " selected" : ""}" data-robot="${i}"${!editing && phase === "play" ? ` role="button" aria-label="${robotName(i)}，${cellName(p)}" aria-pressed="${active}"` : ' pointer-events="none"'}>${active ? `<rect x="${x - 17}" y="${y - 17}" width="34" height="34" rx="11" fill="none" stroke="${palette[i]}" stroke-width="2.5"/>` : ""}<rect x="${x - 12}" y="${y - 12}" width="24" height="24" rx="7" fill="${palette[i]}" stroke="#fff" stroke-width="2"/><text x="${x}" y="${y + 4}" fill="${i === 3 ? "#3e310b" : "#fff"}" text-anchor="middle" font-size="11" font-weight="700" pointer-events="none">${LETTERS[i]}</text></g>`,
         );
     });
     if (tool === "wall")
@@ -179,8 +509,8 @@ function render() {
                     board.blocked.includes(q)
                 )
                     continue;
-                const x = pad + (p % n) * S,
-                    y = pad + Math.floor(p / n) * S,
+                const x = PAD + (p % n) * S,
+                    y = PAD + Math.floor(p / n) * S,
                     e = [
                         [x, y, x + S, y],
                         [x + S, y, x + S, y + S],
@@ -192,9 +522,63 @@ function render() {
                 );
             }
     svg.push("</svg>");
-    $("board").innerHTML = svg.join("");
+    return svg.join("");
+}
+function animateMove() {
+    const m = lastMove;
+    lastMove = null;
+    if (!m || reducedMotion.matches) return;
+    const g = $("board").querySelector(`[data-robot="${m.robot}"]`);
+    if (!g) return;
+    const n = board.size,
+        dx = ((m.from % n) - (m.to % n)) * S,
+        dy = (Math.floor(m.from / n) - Math.floor(m.to / n)) * S,
+        cells = (Math.abs(dx) + Math.abs(dy)) / S;
+    g.style.transform = `translate(${dx}px, ${dy}px)`;
+    g.getBoundingClientRect();
+    g.style.transition = `transform ${Math.min(320, 110 + cells * 30)}ms cubic-bezier(.2,.8,.3,1)`;
+    g.style.transform = "";
+}
+function renderRound() {
+    const editing = tool !== null;
+    $("round").dataset.phase = editing ? "edit" : phase;
+    $("goal").innerHTML = goalText();
+    $("count").hidden = editing;
+    $("count").innerHTML =
+        phase === "answer" && optimalStatus === "optimal"
+            ? `<span>最优</span><strong>${optimal.moves.length}</strong><span>步</span>`
+            : `<strong>${played.length}</strong><span>步</span>`;
+    $("status").textContent = statusText();
+    const focused = document.activeElement?.closest?.("#actions [data-action]")
+        ?.dataset.action;
+    $("actions").innerHTML = actionList()
+        .map(
+            (a) =>
+                `<button data-action="${a.action}" class="${a.primary ? "primary" : ""}"${a.disabled ? " disabled" : ""}${a.title ? ` title="${a.title}"` : ""}>${a.label}</button>`,
+        )
+        .join("");
+    if (focused) {
+        const again = $("actions").querySelector(
+            `[data-action="${focused}"]:not(:disabled)`,
+        );
+        (again ?? $("actions").querySelector("button:not(:disabled)"))?.focus();
+    }
+    const answer = phase === "answer" && optimalStatus === "optimal",
+        list = editing ? [] : answer ? optimal.moves : played;
+    $("moves-panel").hidden = !list.length;
+    $("moves-title").textContent = answer ? "最优解" : "你的走法";
+    $("moves").innerHTML = list
+        .map((m, i) => {
+            const body = `<span class="move-no">${i + 1}</span><span class="swatch" style="--color:${palette[m.robot]}"></span>${COLORS[m.robot]}色${DIRECTION_NAMES[m.direction]}<small>${cellName(m.to)}</small>`;
+            return answer
+                ? `<li><button data-step="${i + 1}" class="${i + 1 === step ? "selected" : ""}" aria-current="${i + 1 === step}">${body}</button></li>`
+                : `<li>${body}</li>`;
+        })
+        .join("");
+}
+function renderSetup() {
     $("undo").disabled = !undoHistory.length;
-    $("count").value = String(board.robots.length);
+    $("robot-count").value = String(board.robots.length);
     $("target-color").value = String(board.target.robot);
     for (const option of $("target-color").options)
         option.disabled = Number(option.value) >= board.robots.length;
@@ -211,20 +595,11 @@ function render() {
         $(id).classList.toggle("active", tool === mode);
         $(id).setAttribute("aria-pressed", String(tool === mode));
     }
-    $("hint").textContent =
-        tool === "wall"
-            ? "点击格子边缘添加 / 移除墙壁；键盘使用 Shift + 方向键。"
-            : tool === "target"
-              ? "点击格子放置目标；目标格允许放置机器人。"
-              : "";
-    $("hint").hidden = !$("hint").textContent;
-
     $("require-turn").checked = !!board.rules?.requireTurn;
+    $("timeout").value = String(timeoutMs);
     $("rotate-board").disabled = board.size !== 16;
-    const selectedGoal = board.goals?.find(
-        (g) => g.cell === board.target.cell && g.robot === board.target.robot,
-    );
-    const custom = customTarget || !selectedGoal;
+    const selectedGoal = currentGoal(),
+        custom = customTarget || !selectedGoal;
     $("target-modes").hidden = !board.goals?.length;
     $("goal-picker").hidden = custom || !board.goals?.length;
     $("custom-target-controls").hidden = !custom;
@@ -233,8 +608,8 @@ function render() {
     $("preset-target").setAttribute("aria-pressed", String(!custom));
     $("custom-target").setAttribute("aria-pressed", String(custom));
     $("current-target").textContent = !custom
-        ? `本轮目标：${selectedGoal.robot < 0 ? "任意颜色" : COLORS[selectedGoal.robot] + "色"} · ${SHAPES[selectedGoal.shape]}`
-        : `自定义目标：${board.target.robot < 0 ? "任意颜色" : COLORS[board.target.robot] + "色"} · (${(board.target.cell % n) + 1}, ${Math.floor(board.target.cell / n) + 1})`;
+        ? `本轮目标：${selectedGoal.robot < 0 ? "任意颜色" : COLORS[selectedGoal.robot] + "色"}${SHAPES[selectedGoal.shape]}`
+        : `自定义目标：${board.target.robot < 0 ? "任意颜色" : COLORS[board.target.robot] + "色"}，位置 ${cellName(board.target.cell)}`;
     const shapes = ["circle", "triangle", "square", "hex", "vortex"];
     $("goal-options").innerHTML = [0, 1, 2, 3, -1]
         .map((robot) => {
@@ -244,33 +619,23 @@ function render() {
                     (a, b) => shapes.indexOf(a.shape) - shapes.indexOf(b.shape),
                 );
             if (!goals.length) return "";
-            return `<div class="goal-color-row"><span>${robot < 0 ? "任意" : COLORS[robot]}</span><div class="goal-buttons">${goals.map((g) => `<button data-goal="${g.id}" aria-label="${robot < 0 ? "任意" : COLORS[robot]} ${SHAPES[g.shape]}" aria-pressed="${!custom && selectedGoal?.id === g.id}" class="${!custom && selectedGoal?.id === g.id ? "active" : ""}" style="--goal-color:${robot < 0 ? "#394554" : palette[robot]}" ${robot >= board.robots.length ? "disabled" : ""}><b>${targetGlyph(g.shape)}</b><small>${SHAPES[g.shape]}</small></button>`).join("")}</div></div>`;
+            return `<div class="goal-color-row"><span>${robot < 0 ? "任意" : COLORS[robot]}</span><div class="goal-buttons">${goals.map((g) => `<button data-goal="${g.id}" aria-label="${robot < 0 ? "任意" : COLORS[robot]}${SHAPES[g.shape]}" aria-pressed="${!custom && selectedGoal?.id === g.id}" class="${!custom && selectedGoal?.id === g.id ? "active" : ""}" style="--goal-color:${robot < 0 ? "#394554" : palette[robot]}" ${robot >= board.robots.length ? "disabled" : ""}><b>${targetGlyph(g.shape)}</b><small>${SHAPES[g.shape]}</small></button>`).join("")}</div></div>`;
         })
         .join("");
-    if (solution) {
-        $("step-range").max = String(solution.moves.length);
-        $("step-range").value = String(step);
-        $("step-label").textContent = `${step} / ${solution.moves.length} 步`;
-        $("previous").disabled = step === 0;
-        $("next").disabled = step === solution.moves.length;
-        $("moves").innerHTML = solution.moves
-            .map(
-                (m, i) =>
-                    `<li><button data-step="${i + 1}" class="${i + 1 === step ? "selected" : ""}"><span>${String(i + 1).padStart(2, "0")}</span><span class="swatch" style="--color:${palette[m.robot]}"></span>${COLORS[m.robot]} ${["↑", "→", "↓", "←"][m.direction]}<small>(${(m.to % n) + 1}, ${Math.floor(m.to / n) + 1})</small></button></li>`,
-            )
-            .join("");
-    }
 }
+function render() {
+    $("board").innerHTML = boardSvg();
+    $("board").classList.toggle("editing", tool !== null);
+    animateMove();
+    renderRound();
+    renderSetup();
+}
+
 function editCell(p) {
-    if (solution && step > 0) {
-        rewind();
-        notify("已回到起点，可以编辑局面。");
-        return;
-    }
     if (board.blocked.includes(p)) return notify("中央区域不能放置棋子。");
     if (tool === "target") {
         board.target = { cell: p, robot: board.target.robot };
-    } else if (tool.startsWith("robot:")) {
+    } else if (tool?.startsWith("robot:")) {
         const r = Number(tool.split(":")[1]);
         if (board.robots.some((v, i) => i !== r && v === p))
             return notify("这个格子已有其他机器人。");
@@ -279,11 +644,6 @@ function editCell(p) {
     changed();
 }
 function editWall(p, d) {
-    if (solution && step > 0) {
-        rewind();
-        notify("已回到起点，可以编辑局面。");
-        return;
-    }
     const q = neighbor(p, d, board.size);
     if (q < 0 || board.blocked.includes(p) || board.blocked.includes(q))
         return notify("外边界和禁入格的墙壁不能移除。");
@@ -291,89 +651,18 @@ function editWall(p, d) {
     delete board.layout;
     changed();
 }
-function startSolve() {
-    if (worker) {
-        stop();
-        $("result").textContent =
-            `已停止 · 尚未证明最优。至少需要 ${lowerBound} 步。`;
-        return;
-    }
-    try {
-        validateBoard(board);
-    } catch (e) {
-        notify(e.message);
-        return;
-    }
-    solution = null;
-    step = 0;
-    lowerBound = 0;
-    $("replay").hidden = true;
-    render();
-    worker = new Worker(new URL("./worker.js", import.meta.url), {
-        type: "module",
-    });
-    $("solve").textContent = "停止搜索 ■";
-    $("solve").classList.add("running");
-    $("result").textContent = "正在计算最少步数…";
-    worker.onmessage = ({ data }) => {
-        if (data.type === "progress") {
-            lowerBound = data.progress.lowerBound;
-            $("result").textContent =
-                `正在检查 ${lowerBound} 步解… 已搜索 ${data.progress.nodes.toLocaleString()} 个节点。`;
-            return;
-        }
-        stop();
-        if (data.type === "error") {
-            $("result").textContent = data.message;
-            return;
-        }
-        const r = data.result;
-        lowerBound = r.lowerBound;
-        if (r.status === "optimal") {
-            solution = r;
-            step = r.moves.length;
-            $("result").innerHTML =
-                `<div class="result-line"><span class="optimal">✓ 已证明最优</span><span><strong>${r.moves.length}</strong>步</span><small>${(r.elapsedMs / 1000).toFixed(2)} 秒</small></div>`;
-            $("replay").hidden = false;
-            render();
-        } else if (r.status === "unsolvable") {
-            $("result").textContent =
-                "无解：目标机器人无法到达目标所在的连通区域。";
-        } else {
-            $("result").textContent =
-                `搜索达到限制，尚未证明最优。至少需要 ${r.lowerBound} 步。可增加搜索时间后重试。`;
-        }
-    };
-    worker.onerror = () => {
-        stop();
-        $("result").textContent = "求解器启动失败，请刷新页面重试。";
-    };
-    worker.postMessage({
-        board,
-        options: { maxMs: Number($("timeout").value), maxDepth: 80 },
-    });
-}
-function loadBoard(value) {
-    const b = validateBoard(value);
-    board = b;
-    customTarget = false;
-    tool = "robot:0";
-    changed();
-}
-function rewind() {
-    step = 0;
-    render();
-}
-function setStep(value) {
-    if (!solution) return;
-    step = Math.max(0, Math.min(solution.moves.length, value));
-    render();
+function directionTo(from, p) {
+    const n = board.size;
+    if (from === p) return -1;
+    if (Math.floor(from / n) === Math.floor(p / n)) return p > from ? 1 : 3;
+    if (from % n === p % n) return p > from ? 2 : 0;
+    return -1;
 }
 function renderAssembly() {
     $("assembly-slots").innerHTML = [0, 1, 3, 2]
         .map((slot) => {
             const tile = tiles.find((t) => t.id === draftLayout[slot]);
-            return `<button class="assembly-slot ${slot === activeSlot ? "selected" : ""}" data-slot="${slot}" aria-pressed="${slot === activeSlot}"><span>${SLOT_NAMES[slot]} · ${tile.id} ${GROUPS[tile.group].name}</span>${tileSvg(tile, slot)}</button>`;
+            return `<button class="assembly-slot ${slot === activeSlot ? "selected" : ""}" data-slot="${slot}" aria-pressed="${slot === activeSlot}"><span>${SLOT_NAMES[slot]}：${tile.id} ${GROUPS[tile.group].name}</span>${tileSvg(tile, slot)}</button>`;
         })
         .join("");
     $("assembly-slot-label").textContent =
@@ -381,92 +670,154 @@ function renderAssembly() {
     $("tile-catalog").innerHTML = Object.entries(GROUPS)
         .map(
             ([group, info]) =>
-                `<section class="tile-group"><h3 style="color:${info.color}">${info.name} · ${group} 组</h3><div class="tile-options">${tiles
+                `<section class="tile-group"><h3 style="color:${info.color}">${info.name}（${group} 组）</h3><div class="tile-options">${tiles
                     .filter((t) => t.group === group && t.supported)
                     .map(
                         (t) =>
-                            `<button class="tile-option ${draftLayout[activeSlot] === t.id ? "selected" : ""}" data-tile="${t.id}" aria-pressed="${draftLayout[activeSlot] === t.id}">${tileSvg(t, activeSlot)}<span>${t.id}${draftLayout.includes(t.id) ? " · 已选" : ""}</span></button>`,
+                            `<button class="tile-option ${draftLayout[activeSlot] === t.id ? "selected" : ""}" data-tile="${t.id}" aria-pressed="${draftLayout[activeSlot] === t.id}">${tileSvg(t, activeSlot)}<span>${t.id}${draftLayout.includes(t.id) ? "（已选）" : ""}</span></button>`,
                     )
                     .join("")}</div></section>`,
         )
         .join("");
 }
-function init() {
-    render();
-    $("undo").onclick = () => {
-        if (!undoHistory.length) return;
-        const value = undoHistory.pop();
-        previousBoard = structuredClone(value);
-        loadBoard(value);
-    };
-    $("step-range").oninput = (e) => setStep(Number(e.target.value));
-    const chooseTool = (value) => {
-        tool = tool === value && value === "wall" ? "robot:0" : value;
-        step = 0;
-        render();
-    };
-    $("edit-walls").onclick = () => chooseTool("wall");
-    $("place-target").onclick = () => chooseTool("target");
-    const applyRandom = (action) => {
-        try {
-            loadBoard(action());
-        } catch (error) {
-            notify(error.message);
-        }
-    };
-    $("next-round").onclick = () => {
-        applyRandom(() => nextRound(board, solution));
-    };
-    $("new-round").onclick = () =>
-        applyRandom(() => randomRobots(randomTarget(board)));
-    $("random-physical").onclick = () =>
-        applyRandom(() => randomPhysical(tiles, board));
-    $("random-artificial").onclick = () =>
-        applyRandom(() => randomArtificial(board));
-    $("random-robots").onclick = () => applyRandom(() => randomRobots(board));
-    $("random-target").onclick = () => {
-        const custom =
-            customTarget ||
-            !board.goals?.some(
-                (g) =>
-                    g.cell === board.target.cell &&
-                    g.robot === board.target.robot,
+// On phones the round panel is pinned to the bottom; keep page content clear of it.
+function trackRoundPanel() {
+    const panel = $("round"),
+        update = () =>
+            document.documentElement.style.setProperty(
+                "--round-height",
+                getComputedStyle(panel).position === "fixed"
+                    ? `${panel.offsetHeight}px`
+                    : "0px",
             );
-        if (!custom) return applyRandom(() => randomTarget(board));
-        const input = structuredClone(board);
-        delete input.goals;
-        try {
-            board.target = randomTarget(input).target;
-            customTarget = true;
-            changed();
-        } catch (error) {
-            notify(error.message);
-        }
-    };
-    $("show-all").onclick = () => setStep(solution?.moves.length ?? 0);
-    $("tools").onclick = (e) => {
-        const b = e.target.closest("[data-tool]");
-        if (b) {
-            chooseTool(b.dataset.tool);
-        }
+    new ResizeObserver(update).observe(panel);
+    addEventListener("resize", update);
+    update();
+}
+
+function init() {
+    startRound();
+    trackRoundPanel();
+    $("actions").onclick = (e) => {
+        const button = e.target.closest("[data-action]");
+        if (!button || button.disabled) return;
+        ({
+            "finish-edit": () => setTool(null, false),
+            "undo-move": undoMove,
+            restart,
+            hint: requestHint,
+            answer: showAnswer,
+            next: goNext,
+            prev: () => setStep(step - 1),
+            forward: () => setStep(step + 1),
+            resume: () => {
+                phase = "play";
+                render();
+            },
+            resolve: () => {
+                solveRound();
+                render();
+            },
+        })[button.dataset.action]?.();
     };
     $("board").onclick = (e) => {
-        const w = e.target.closest("[data-wall]");
-        if (w) {
-            const [p, d] = w.dataset.wall.split(":").map(Number);
-            editWall(p, d);
+        if (swiped) {
+            swiped = false;
             return;
         }
+        if (tool !== null) {
+            const w = e.target.closest("[data-wall]");
+            if (w) {
+                const [p, d] = w.dataset.wall.split(":").map(Number);
+                return editWall(p, d);
+            }
+            const cell = e.target.closest("[data-cell]");
+            if (cell) editCell(Number(cell.dataset.cell));
+            return;
+        }
+        if (phase !== "play") return;
+        const ghost = e.target.closest("[data-move]");
+        if (ghost) return move(selected, Number(ghost.dataset.move));
+        const robot = e.target.closest("[data-robot]");
+        if (robot) {
+            const r = Number(robot.dataset.robot);
+            selected = selected === r ? null : r;
+            message = "";
+            return render();
+        }
         const cell = e.target.closest("[data-cell]");
-        if (cell) editCell(Number(cell.dataset.cell));
-    };
-    $("board").onkeydown = (e) => {
-        const cell = e.target.closest("[data-cell]");
-        if (!cell) return;
-        const p = Number(cell.dataset.cell),
-            d = ["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"].indexOf(
-                e.key,
+        if (cell && selected !== null) {
+            const d = directionTo(
+                positions()[selected],
+                Number(cell.dataset.cell),
             );
+            if (d >= 0) move(selected, d);
+        }
+    };
+    // Dragging a robot moves it in the direction of the drag.
+    $("board").addEventListener("pointerdown", (e) => {
+        const robot = e.target.closest("[data-robot]");
+        drag =
+            tool === null && phase === "play" && robot
+                ? {
+                      robot: Number(robot.dataset.robot),
+                      x: e.clientX,
+                      y: e.clientY,
+                      id: e.pointerId,
+                  }
+                : null;
+    });
+    $("board").addEventListener("pointerup", (e) => {
+        if (!drag || e.pointerId !== drag.id) return;
+        const dx = e.clientX - drag.x,
+            dy = e.clientY - drag.y,
+            r = drag.robot;
+        drag = null;
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+        swiped = true;
+        setTimeout(() => (swiped = false), 350);
+        move(r, Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : dy > 0 ? 2 : 0);
+    });
+    $("board").addEventListener("pointercancel", () => (drag = null));
+    $("board").onkeydown = (e) => {
+        if (tool !== null) return editKey(e);
+        if (e.altKey) return;
+        const number = Number(e.key);
+        if (Number.isInteger(number) && number >= 1 && number <= board.robots.length) {
+            e.preventDefault();
+            if (phase === "play") {
+                selected = number - 1;
+                message = "";
+                render();
+            }
+            return;
+        }
+        const d = KEYS.indexOf(e.key);
+        if (d >= 0 && !e.metaKey && !e.ctrlKey) {
+            e.preventDefault();
+            if (phase !== "play") return;
+            if (selected === null)
+                selected = board.target.robot >= 0 ? board.target.robot : 0;
+            move(selected, d);
+        } else if (
+            e.key === "Backspace" ||
+            ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z")
+        ) {
+            e.preventDefault();
+            undoMove();
+        }
+    };
+    function editKey(e) {
+        const cell = e.target.closest("[data-cell]");
+        const d = KEYS.indexOf(e.key);
+        if (!cell) {
+            if (d >= 0 || e.key === "Enter") {
+                e.preventDefault();
+                $("board").querySelector('[data-cell][tabindex="0"]')?.focus();
+            }
+            return;
+        }
+        const p = Number(cell.dataset.cell);
         if (d >= 0) {
             e.preventDefault();
             if (e.shiftKey && tool === "wall") {
@@ -486,7 +837,55 @@ function init() {
             editCell(p);
             $("board").querySelector(`[data-cell="${p}"]`)?.focus();
         }
+    }
+    $("moves").onclick = (e) => {
+        const b = e.target.closest("[data-step]");
+        if (b) setStep(Number(b.dataset.step));
     };
+
+    const applyRandom = (action) => {
+        try {
+            loadBoard(action());
+        } catch (error) {
+            notify(error.message);
+        }
+    };
+    $("undo").onclick = () => {
+        if (!undoHistory.length) return;
+        const value = undoHistory.pop();
+        previousBoard = structuredClone(value);
+        board = validateBoard(value);
+        customTarget = false;
+        tool = null;
+        save();
+        startRound();
+    };
+    $("new-round").onclick = () =>
+        applyRandom(() => randomRobots(randomTarget(board)));
+    $("random-physical").onclick = () =>
+        applyRandom(() => randomPhysical(tiles, board));
+    $("random-artificial").onclick = () =>
+        applyRandom(() => randomArtificial(board));
+    $("random-robots").onclick = () => applyRandom(() => randomRobots(board));
+    $("random-target").onclick = () => {
+        const custom = customTarget || !currentGoal();
+        if (!custom) return applyRandom(() => randomTarget(board));
+        const input = structuredClone(board);
+        delete input.goals;
+        try {
+            board.target = randomTarget(input).target;
+            customTarget = true;
+            changed();
+        } catch (error) {
+            notify(error.message);
+        }
+    };
+    $("tools").onclick = (e) => {
+        const b = e.target.closest("[data-tool]");
+        if (b) setTool(b.dataset.tool);
+    };
+    $("edit-walls").onclick = () => setTool("wall");
+    $("place-target").onclick = () => setTool("target");
     $("target-color").onchange = (e) => {
         board.target = {
             cell: board.target.cell,
@@ -494,7 +893,7 @@ function init() {
         };
         changed();
     };
-    $("count").onchange = (e) => {
+    $("robot-count").onchange = (e) => {
         const count = Number(e.target.value);
         const nextRobots = board.robots.slice(0, count);
         while (nextRobots.length < count) {
@@ -510,8 +909,8 @@ function init() {
         }
         board.robots = nextRobots;
         if (board.target.robot >= count) board.target.robot = 0;
-        if (tool.startsWith("robot:") && Number(tool.split(":")[1]) >= count)
-            tool = "robot:0";
+        if (tool?.startsWith("robot:") && Number(tool.split(":")[1]) >= count)
+            tool = null;
         changed();
     };
     $("preset").onclick = () => {
@@ -570,7 +969,7 @@ function init() {
         try {
             loadBoard(assemble(draftLayout, tiles, board));
             $("assembly-dialog").close();
-            notify("棋盘已拼装，接着放置机器人并选择目标。");
+            notify("棋盘已拼装，可以在局面设置里摆放机器人和选择目标。");
         } catch (error) {
             notify(error.message);
         }
@@ -580,7 +979,7 @@ function init() {
         if (!goal || goal.robot >= board.robots.length) return;
         board.target = { ...goal };
         customTarget = false;
-        tool = "robot:0";
+        tool = null;
         changed();
     };
     $("goal-options").onclick = (e) => {
@@ -590,31 +989,27 @@ function init() {
     };
     $("preset-target").onclick = () =>
         selectGoal(
-            board.goals?.find(
-                (g) =>
-                    g.cell === board.target.cell &&
-                    g.robot === board.target.robot,
-            ) ?? board.goals?.find((g) => g.robot < board.robots.length),
+            currentGoal() ??
+                board.goals?.find((g) => g.robot < board.robots.length),
         );
     $("custom-target").onclick = () => {
         customTarget = true;
-        step = 0;
-        tool = "target";
-        render();
+        setTool("target", false);
     };
     $("require-turn").onchange = (e) => {
         board.rules = { requireTurn: e.target.checked };
         changed();
     };
-    $("empty").onclick = () => loadBoard(emptyBoard());
-    $("solve").onclick = startSolve;
-    $("previous").onclick = () => setStep(step - 1);
-    $("next").onclick = () => setStep(step + 1);
-    $("rewind").onclick = rewind;
-    $("moves").onclick = (e) => {
-        const b = e.target.closest("[data-step]");
-        if (b) setStep(Number(b.dataset.step));
+    $("timeout").onchange = (e) => {
+        timeoutMs = Number(e.target.value);
+        try {
+            localStorage.setItem("ricochet-timeout", String(timeoutMs));
+        } catch {}
+        if (tool === null && !["optimal", "unsolvable", "running"].includes(optimalStatus))
+            solveRound();
+        render();
     };
+    $("empty").onclick = () => loadBoard(emptyBoard());
     $("export").onclick = () => {
         const url = URL.createObjectURL(
                 new Blob([JSON.stringify(board, null, 2)], {
@@ -648,7 +1043,7 @@ function init() {
             {
                 name: "read_ricochet_board",
                 description:
-                    "Read the current board and optimal search result.",
+                    "Read the current board, the player's moves and the optimal search result.",
                 inputSchema: {
                     type: "object",
                     properties: {},
@@ -657,13 +1052,14 @@ function init() {
                 annotations: { readOnlyHint: true },
                 execute: () => ({
                     board: structuredClone(board),
-                    result: solution,
+                    moves: structuredClone(played),
+                    result: optimal,
                 }),
             },
             {
                 name: "set_ricochet_board",
                 description:
-                    "Validate and replace the current board, saving it in this browser and clearing the prior solution.",
+                    "Validate and replace the current board, saving it in this browser and starting a new round.",
                 inputSchema: {
                     type: "object",
                     properties: { board: { type: "object" } },
