@@ -111,8 +111,7 @@ main {
 header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+    gap: 14px;
     max-width: none;
     padding: 30px max(24px, (100% - 1280px) / 2 + 24px);
     border-bottom: 1px solid var(--line);
@@ -128,6 +127,22 @@ main {
     display: grid;
     gap: 16px;
     padding: 24px 24px;
+}
+/* Quiet text button beside the title, styled like the link back to the game list. */
+.text-button {
+    border: 0;
+    background: none;
+    padding: 4px 2px;
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+@media (hover: hover) {
+    .text-button:hover:not(:disabled) {
+        background: none;
+        color: var(--ink);
+        text-decoration: underline;
+        text-underline-offset: 4px;
+    }
 }
 aside {
     min-width: 0;
@@ -296,40 +311,6 @@ footer a {
 }
 .status:empty {
     margin: 0;
-}
-.help-toggle {
-    flex-shrink: 0;
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    border-radius: 50%;
-    color: var(--muted);
-    font-size: 0.8rem;
-    font-weight: 650;
-    line-height: 1;
-}
-.help-toggle[aria-expanded="true"] {
-    border-color: var(--accent);
-    color: var(--accent);
-}
-.help {
-    margin-top: 10px;
-    padding: 10px 12px;
-    border-radius: 9px;
-    background: #f3f6f8;
-    color: var(--muted);
-    font-size: 0.8rem;
-    line-height: 1.6;
-}
-.help p {
-    margin: 0;
-}
-.help p + p {
-    margin-top: 6px;
-}
-.round-panel[data-phase="won"] .status {
-    color: var(--accent-ink);
-    font-weight: 600;
 }
 .actions {
     margin-top: 14px;
@@ -563,6 +544,26 @@ dialog {
     color: var(--ink);
     background: #f5f8fa;
     box-shadow: 0 25px 80px #0004;
+}
+.help-dialog {
+    width: min(440px, 92vw);
+    padding: 20px 22px 22px;
+    background: var(--surface);
+}
+.help-dialog h2 {
+    font-size: 1.05rem;
+}
+.help-dialog p {
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: 0.875rem;
+    line-height: 1.7;
+}
+.dialog-heading button {
+    border: 0;
+    background: none;
+    padding: 4px 8px;
+    color: var(--muted);
 }
 dialog::backdrop {
     background: #12263599;

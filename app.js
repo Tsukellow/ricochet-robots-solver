@@ -781,10 +781,11 @@ function trackRoundPanel() {
 function init() {
     startRound();
     trackRoundPanel();
-    $("help-toggle").onclick = () => {
-        const open = $("help").hidden;
-        $("help").hidden = !open;
-        $("help-toggle").setAttribute("aria-expanded", String(open));
+    $("help-open").onclick = () => $("help-dialog").showModal();
+    $("close-help").onclick = () => $("help-dialog").close();
+    // A click on the backdrop lands on the dialog element itself.
+    $("help-dialog").onclick = (e) => {
+        if (e.target === $("help-dialog")) $("help-dialog").close();
     };
     $("actions").onclick = (e) => {
         const button = e.target.closest("[data-action]");
