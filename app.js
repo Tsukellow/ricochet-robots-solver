@@ -64,10 +64,10 @@ let optimal = null,
     step = 0,
     roundId = 0,
     timeoutMs = 10000;
-// Each round opens with a thinking phase: a clean board and a countdown before moves can be entered.
+// Each round opens with a thinking phase on a clean board. As in the board game, the countdown
+// only starts when someone calls a move count (the 开始倒计时 button).
 let thinkLimit = 60,
-    thinkStart = 0,
-    thinkUsed = null,
+    countdownStart = null,
     thinkTimer = null;
 try {
     const saved = localStorage.getItem("ricochet-lab-v1");
@@ -80,7 +80,7 @@ try {
     const limit = Number(localStorage.getItem("ricochet-timeout"));
     if ([10000, 30000, 120000].includes(limit)) timeoutMs = limit;
     const think = localStorage.getItem("ricochet-think");
-    if (think !== null && [0, 30, 60, 120].includes(Number(think)))
+    if (think !== null && [30, 60, 120].includes(Number(think)))
         thinkLimit = Number(think);
 } catch {
     notify("已载入示例；此前保存的棋盘无法读取。");
@@ -173,29 +173,32 @@ function solveRound() {
         render();
     });
 }
-function thinkElapsed() {
-    return (Date.now() - thinkStart) / 1000;
-}
 function stopThinking() {
     clearInterval(thinkTimer);
     thinkTimer = null;
 }
+function countdownLeft() {
+    return thinkLimit - (Date.now() - countdownStart) / 1000;
+}
 function tickThinking() {
     if (phase !== "think") return stopThinking();
-    if (thinkLimit && thinkElapsed() >= thinkLimit) return startInput(true);
+    if (countdownStart !== null && countdownLeft() <= 0) return startInput(true);
     renderClock();
+}
+function startCountdown() {
+    if (phase !== "think" || countdownStart !== null) return;
+    countdownStart = Date.now();
+    thinkTimer = setInterval(tickThinking, 250);
+    render();
 }
 function startThinking() {
     stopThinking();
     phase = "think";
     selected = null;
-    thinkStart = Date.now();
-    thinkUsed = null;
-    thinkTimer = setInterval(tickThinking, 250);
+    countdownStart = null;
 }
 function startInput(timeUp = false) {
     if (phase !== "think") return;
-    thinkUsed = Math.min(thinkElapsed(), thinkLimit || Infinity);
     stopThinking();
     phase = "play";
     selected = board.target.robot >= 0 ? board.target.robot : null;
@@ -360,7 +363,7 @@ function statusText() {
     if (tool) return `点一个格子放置${robotName(Number(tool.split(":")[1]))}。`;
     if (message) return message;
     if (phase === "won") {
-        const done = `到达目标，用了 ${played.length} 步${thinkUsed === null ? "" : `，思考 ${clock(thinkUsed)}`}。`;
+        const done = `到达目标，用了 ${played.length} 步。`;
         if (optimalStatus === "optimal") {
             const m = optimal.moves.length;
             return played.length === m
@@ -386,9 +389,9 @@ function statusText() {
         return "这一局无解：目标机器人到不了目标格。换个目标再玩。";
     if (optimalStatus === "error") return optimal.message;
     if (phase === "think")
-        return thinkLimit
-            ? "先在脑中想好解法，再点「开始输入解法」。倒计时结束会自动开始。"
-            : "先在脑中想好解法，再点「开始输入解法」。";
+        return countdownStart === null
+            ? "先在脑中想解法，想好后点「开始输入解法」。多人玩时，有人报出步数就点「开始倒计时」。"
+            : "倒计时中，结束后自动开始输入解法。";
     if (played.length) {
         const m = played.at(-1);
         return `${robotName(m.robot)}${DIRECTION_NAMES[m.direction]}，停在 ${cellName(m.to)}。`;
@@ -429,6 +432,9 @@ function actionList() {
     if (phase === "think")
         return [
             { action: "answer", label: "看答案" },
+            ...(countdownStart === null
+                ? [{ action: "countdown", label: "开始倒计时" }]
+                : []),
             { action: "start-input", label: "开始输入解法", primary: true },
         ];
     return [
@@ -605,14 +611,17 @@ function animateMove() {
 }
 // The thinking clock updates on its own tick without redrawing the board.
 function renderClock() {
-    const elapsed = thinkElapsed(),
-        left = thinkLimit ? Math.max(0, thinkLimit - elapsed) : elapsed,
-        urgent = !!thinkLimit && left <= 10;
-    $("count").innerHTML = `<span>${thinkLimit ? "剩余" : "思考"}</span><strong>${clock(thinkLimit ? Math.ceil(left) : elapsed)}</strong>`;
+    const counting = countdownStart !== null,
+        left = counting ? Math.max(0, countdownLeft()) : 0,
+        urgent = counting && left <= 10;
+    $("count").hidden = !counting;
+    $("count").innerHTML = counting
+        ? `<span>剩余</span><strong>${clock(Math.ceil(left))}</strong>`
+        : "";
     $("count").classList.toggle("urgent", urgent);
-    $("think-bar").hidden = !thinkLimit;
+    $("think-bar").hidden = !counting;
     $("think-bar").classList.toggle("urgent", urgent);
-    $("think-bar").firstElementChild.style.width = `${thinkLimit ? (left / thinkLimit) * 100 : 0}%`;
+    $("think-bar").firstElementChild.style.width = `${counting ? (left / thinkLimit) * 100 : 100}%`;
 }
 function renderRound() {
     const editing = tool !== null;
@@ -785,6 +794,7 @@ function init() {
         ({
             "finish-edit": () => setTool(null, false),
             "start-input": () => startInput(),
+            countdown: startCountdown,
             "undo-move": undoMove,
             restart,
             hint: requestHint,
@@ -882,6 +892,9 @@ function init() {
             if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 startInput();
+            } else if (e.key.toLowerCase() === "t" && !e.metaKey && !e.ctrlKey) {
+                e.preventDefault();
+                startCountdown();
             }
             return;
         }
@@ -1108,7 +1121,8 @@ function init() {
         try {
             localStorage.setItem("ricochet-think", String(thinkLimit));
         } catch {}
-        if (phase === "think") thinkStart = Date.now();
+        if (phase === "think" && countdownStart !== null)
+            countdownStart = Date.now();
         render();
     };
     $("timeout").onchange = (e) => {

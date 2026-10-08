@@ -4,11 +4,12 @@ A browser version of the board game **Ricochet Robots** (碰撞机器人) for on
 
 ## Play
 
-1. A round starts with a target and a thinking countdown (30 seconds, 1 minute, 2 minutes or no limit, set under **规则与求解**). The board stays clear while you work out a route in your head.
-2. Select **开始输入解法**, or press Enter on the board, to start entering moves; input also starts when the countdown ends. The target robot is selected, and dashed outlines show where it stops in each direction.
-3. Tap a dashed outline, tap any cell in that line, or drag the robot in a direction. On a keyboard, focus the board, press 1–5 to select a robot and press an arrow key to move it.
-4. Reach the target to finish the round. The page then shows your move count, your thinking time and the optimal move count.
-5. **下一局** keeps the robots where they are and draws a new target, as in the board game.
+1. A round starts with a target and a thinking phase. The board stays clear while you work out a route in your head. Playing alone, select **开始输入解法** when you are ready.
+2. With several players, as in the board game, select **开始倒计时** when someone calls a move count (or press T on the board). The countdown lasts 1 minute by default; 30 seconds and 2 minutes are under **规则与求解**.
+3. Select **开始输入解法**, or press Enter on the board, to start entering moves; input also starts when the countdown ends. The target robot is selected, and dashed outlines show where it stops in each direction.
+4. Tap a dashed outline, tap any cell in that line, or drag the robot in a direction. On a keyboard, focus the board, press 1–5 to select a robot and press an arrow key to move it.
+5. Reach the target to finish the round. The page then shows your move count and the optimal move count.
+6. **下一局** keeps the robots where they are and draws a new target, as in the board game.
 
 During a round, **撤销** takes back one move, **重来** returns to the start, **提示** shows the next optimal move from the current position, and **看答案** replays the optimal route step by step.
 

@@ -26,7 +26,7 @@
                     ></div>
                 </div>
                 <p id="board-help" class="visually-hidden">
-                    思考阶段按回车开始输入解法。输入时数字键 1 到 5 选择机器人，方向键移动，Backspace 撤销一步。
+                    思考阶段按回车开始输入解法，按 T 开始倒计时。输入时数字键 1 到 5 选择机器人，方向键移动，Backspace 撤销一步。
                 </p>
             </section>
             <aside>
@@ -136,12 +136,11 @@
                             />目标机器人至少转弯一次（90°）</label
                         >
                         <div class="field-row">
-                            <label for="think-limit">思考时间</label>
+                            <label for="think-limit">倒计时长度</label>
                             <select id="think-limit">
                                 <option value="30">30 秒</option>
                                 <option value="60">1 分钟</option>
                                 <option value="120">2 分钟</option>
-                                <option value="0">不限时</option>
                             </select>
                         </div>
                         <div class="field-row">
