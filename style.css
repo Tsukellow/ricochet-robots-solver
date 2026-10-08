@@ -192,8 +192,12 @@ footer a {
 }
 #board svg [role="gridcell"]:focus {
     outline: none;
+}
+#board .cell-focus {
+    fill: var(--focus);
+    fill-opacity: 0.14;
     stroke: var(--focus);
-    stroke-width: 3;
+    stroke-width: 2.5;
 }
 #board .wall-hit {
     cursor: crosshair;

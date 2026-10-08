@@ -396,6 +396,30 @@ function actionList() {
     ];
 }
 
+// Printed target shapes, drawn as geometry so they sit exactly on the cell centre.
+function shapeSvg(shape, x, y, color, opacity) {
+    const attrs = `fill="${color}" opacity="${opacity}" pointer-events="none"`,
+        points = (k, r, start) =>
+            Array.from({ length: k }, (_, i) => {
+                const a = start + (i * 2 * Math.PI) / k;
+                return `${(x + r * Math.cos(a)).toFixed(2)},${(y + r * Math.sin(a)).toFixed(2)}`;
+            }).join(" ");
+    if (shape === "triangle")
+        return `<polygon points="${x},${y - 7.5} ${x + 8.5},${y + 7} ${x - 8.5},${y + 7}" ${attrs}/>`;
+    if (shape === "square")
+        return `<rect x="${x - 6.5}" y="${y - 6.5}" width="13" height="13" rx="2" ${attrs}/>`;
+    if (shape === "hex") return `<polygon points="${points(6, 8, -Math.PI / 2)}" ${attrs}/>`;
+    if (shape === "vortex")
+        return `<g stroke="${color}" stroke-width="2.4" stroke-linecap="round" opacity="${opacity}" pointer-events="none">${[0, 1, 2, 3]
+            .map((i) => {
+                const a = (i * Math.PI) / 4,
+                    dx = (8 * Math.cos(a)).toFixed(2),
+                    dy = (8 * Math.sin(a)).toFixed(2);
+                return `<line x1="${x - dx}" y1="${y - dy}" x2="${x + Number(dx)}" y2="${y + Number(dy)}"/>`;
+            })
+            .join("")}</g>`;
+    return `<circle cx="${x}" cy="${y}" r="7" ${attrs}/>`;
+}
 function boardSvg() {
     const n = board.size,
         editing = tool !== null,
@@ -432,7 +456,13 @@ function boardSvg() {
         const x = PAD + (goal.cell % n) * S + S / 2,
             y = PAD + Math.floor(goal.cell / n) * S + S / 2;
         svg.push(
-            `<text x="${x}" y="${y + 6}" text-anchor="middle" fill="${goal.robot < 0 ? "#394554" : palette[goal.robot]}" font-size="21" opacity="${goal.cell === board.target.cell ? 1 : 0.45}" pointer-events="none">${targetGlyph(goal.shape)}</text>`,
+            shapeSvg(
+                goal.shape,
+                x,
+                y,
+                goal.robot < 0 ? "#394554" : palette[goal.robot],
+                goal.cell === board.target.cell ? 1 : 0.45,
+            ),
         );
     }
     const t = board.target.cell,
@@ -440,7 +470,7 @@ function boardSvg() {
         ty = PAD + Math.floor(t / n) * S + S / 2,
         c = board.target.robot < 0 ? "#394554" : palette[board.target.robot];
     svg.push(
-        `<g pointer-events="none" class="${phase === "won" && !editing ? "target reached" : "target"}"><circle cx="${tx}" cy="${ty}" r="16" fill="${c}" opacity="0" class="target-glow"/><circle cx="${tx}" cy="${ty}" r="13" fill="none" stroke="${c}" stroke-width="3"/><circle cx="${tx}" cy="${ty}" r="5" fill="${c}"/></g>`,
+        `<g pointer-events="none" class="${phase === "won" && !editing ? "target reached" : "target"}"><circle cx="${tx}" cy="${ty}" r="16" fill="${c}" opacity="0" class="target-glow"/>${currentGoal() ? `<circle cx="${tx}" cy="${ty}" r="15" fill="none" stroke="${c}" stroke-width="2.5"/>` : `<circle cx="${tx}" cy="${ty}" r="13" fill="none" stroke="${c}" stroke-width="3"/><circle cx="${tx}" cy="${ty}" r="5" fill="${c}"/>`}</g>`,
     );
     for (let p = 0; p < n * n; p++)
         for (let d = 0; d < 4; d++) {
@@ -485,9 +515,12 @@ function boardSvg() {
             const to = slide(board, robots, selected, d);
             if (to === from) continue;
             const [gx, gy] = center(to),
-                hinted = hint?.robot === selected && hint.direction === d;
+                hinted = hint?.robot === selected && hint.direction === d,
+                ux = Math.sign(gx - fx),
+                uy = Math.sign(gy - fy);
+            // The dashed line runs from the robot's ring to the edge of the landing outline.
             svg.push(
-                `<g class="ghost${hinted ? " hinted" : ""}" data-move="${d}" role="button" aria-label="${robotName(selected)}${DIRECTION_NAMES[d]}，停在 ${cellName(to)}"><line x1="${fx}" y1="${fy}" x2="${gx}" y2="${gy}" stroke="${color}" stroke-width="${hinted ? 3.5 : 2}" stroke-dasharray="${hinted ? "7 5" : "3 6"}" stroke-linecap="round" opacity="${hinted ? 0.95 : 0.6}" pointer-events="none"/><rect x="${gx - 15}" y="${gy - 15}" width="30" height="30" rx="9" fill="${color}" fill-opacity="${hinted ? 0.28 : 0.12}" stroke="${color}" stroke-width="2" stroke-dasharray="4 3"/></g>`,
+                `<g class="ghost${hinted ? " hinted" : ""}" data-move="${d}" role="button" aria-label="${robotName(selected)}${DIRECTION_NAMES[d]}，停在 ${cellName(to)}"><line x1="${fx + ux * 17}" y1="${fy + uy * 17}" x2="${gx - ux * 15}" y2="${gy - uy * 15}" stroke="${color}" stroke-width="${hinted ? 3.5 : 2}" stroke-dasharray="${hinted ? "7 5" : "3 6"}" stroke-linecap="round" opacity="${hinted ? 0.95 : 0.6}" pointer-events="none"/><rect x="${gx - 15}" y="${gy - 15}" width="30" height="30" rx="9" fill="${color}" fill-opacity="${hinted ? 0.28 : 0.12}" stroke="${color}" stroke-width="2" stroke-dasharray="4 3"/></g>`,
             );
         }
     }
@@ -521,6 +554,10 @@ function boardSvg() {
                     `<line class="wall-hit" data-wall="${p}:${d}" x1="${e[0]}" y1="${e[1]}" x2="${e[2]}" y2="${e[3]}" stroke="transparent" stroke-width="13"/>`,
                 );
             }
+    if (editing)
+        svg.push(
+            `<rect class="cell-focus" x="0" y="0" width="${S - 4}" height="${S - 4}" rx="7" visibility="hidden" pointer-events="none"/>`,
+        );
     svg.push("</svg>");
     return svg.join("");
 }
@@ -779,6 +816,20 @@ function init() {
         move(r, Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : dy > 0 ? 2 : 0);
     });
     $("board").addEventListener("pointercancel", () => (drag = null));
+    // Keyboard focus in edit mode: outline the focused cell above the grid lines.
+    $("board").addEventListener("focusin", (e) => {
+        const cell = e.target.closest?.("[data-cell]"),
+            ring = $("board").querySelector(".cell-focus");
+        if (!ring) return;
+        if (!cell || !cell.matches(":focus-visible"))
+            return ring.setAttribute("visibility", "hidden");
+        ring.setAttribute("x", Number(cell.getAttribute("x")) + 2);
+        ring.setAttribute("y", Number(cell.getAttribute("y")) + 2);
+        ring.setAttribute("visibility", "visible");
+    });
+    $("board").addEventListener("focusout", () =>
+        $("board").querySelector(".cell-focus")?.setAttribute("visibility", "hidden"),
+    );
     $("board").onkeydown = (e) => {
         if (tool !== null) return editKey(e);
         if (e.altKey) return;
